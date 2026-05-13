@@ -1,0 +1,20 @@
+{
+  "corpus_files": 612,
+  "corpus_chunks": 16186,
+  "depth_histogram": {
+    "0": 612,
+    "1": 5215,
+    "2": 10359
+  },
+  "chunk_time_sec": 1.866,
+  "chunks_per_sec": 8676.0,
+  "faiss_build_ms": 6.0,
+  "faiss_memory_mb": 24.9,
+  "faiss_search_ms_per_query": 1.318,
+  "hyprag_build_ms": 90.3,
+  "hyprag_memory_mb": 153.9,
+  "hyprag_search_ms_per_query": 21.371,
+  "subtree_coherence_faiss": 0.005,
+  "subtree_coherence_hyprag": 0.0,
+  "subtree_coherence_hyprag_expanded": 0.67
+}

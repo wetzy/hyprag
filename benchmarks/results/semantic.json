@@ -1,0 +1,332 @@
+{
+  "encoder_model": "all-MiniLM-L6-v2",
+  "n_queries": 20,
+  "recall_at_k_faiss": 0.059,
+  "precision_at_k_faiss": 0.13,
+  "recall_at_k_hyprag": 0.029,
+  "precision_at_k_hyprag": 0.11,
+  "recall_at_k_hyprag_expanded": 0.09,
+  "precision_at_k_hyprag_expanded": 0.098,
+  "per_query": [
+    {
+      "query": "how does asyncio schedule callbacks",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "where is SSL certificate validation",
+      "n_relevant_in_corpus": 73,
+      "faiss": {
+        "recall": 0.0273972602739726,
+        "precision": 0.4
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "what does the csv DictWriter do",
+      "n_relevant_in_corpus": 6,
+      "faiss": {
+        "recall": 0.3333333333333333,
+        "precision": 0.4
+      },
+      "hyprag": {
+        "recall": 0.16666666666666666,
+        "precision": 0.2
+      },
+      "hyprag_expanded": {
+        "recall": 0.16666666666666666,
+        "precision": 0.05
+      }
+    },
+    {
+      "query": "how is os path join implemented across platforms",
+      "n_relevant_in_corpus": 2,
+      "faiss": {
+        "recall": 0.5,
+        "precision": 0.2
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "where are HTTP status codes defined",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "how does threading Lock work internally",
+      "n_relevant_in_corpus": 26,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.038461538461538464,
+        "precision": 0.2
+      },
+      "hyprag_expanded": {
+        "recall": 0.038461538461538464,
+        "precision": 0.05
+      }
+    },
+    {
+      "query": "how does pickle handle custom classes",
+      "n_relevant_in_corpus": 109,
+      "faiss": {
+        "recall": 0.009174311926605505,
+        "precision": 0.2
+      },
+      "hyprag": {
+        "recall": 0.01834862385321101,
+        "precision": 0.4
+      },
+      "hyprag_expanded": {
+        "recall": 0.01834862385321101,
+        "precision": 0.1
+      }
+    },
+    {
+      "query": "where is JSON parsing logic",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "how does logging configure handlers",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "what does collections OrderedDict do",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "how does urllib parse URLs",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "how does subprocess Popen launch processes",
+      "n_relevant_in_corpus": 42,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "how does datetime parse strings",
+      "n_relevant_in_corpus": 72,
+      "faiss": {
+        "recall": 0.013888888888888888,
+        "precision": 0.2
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "how does argparse handle subparsers",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "where is base64 encoding implemented",
+      "n_relevant_in_corpus": 26,
+      "faiss": {
+        "recall": 0.07692307692307693,
+        "precision": 0.4
+      },
+      "hyprag": {
+        "recall": 0.07692307692307693,
+        "precision": 0.4
+      },
+      "hyprag_expanded": {
+        "recall": 0.5769230769230769,
+        "precision": 0.75
+      }
+    },
+    {
+      "query": "how does sqlite3 connect to a database",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "how does heapq maintain the heap invariant",
+      "n_relevant_in_corpus": 18,
+      "faiss": {
+        "recall": 0.16666666666666666,
+        "precision": 0.6
+      },
+      "hyprag": {
+        "recall": 0.2777777777777778,
+        "precision": 1.0
+      },
+      "hyprag_expanded": {
+        "recall": 1.0,
+        "precision": 1.0
+      }
+    },
+    {
+      "query": "what does the abc module provide",
+      "n_relevant_in_corpus": 17,
+      "faiss": {
+        "recall": 0.058823529411764705,
+        "precision": 0.2
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "how does xml etree parse documents",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    },
+    {
+      "query": "how does multiprocessing share memory between processes",
+      "n_relevant_in_corpus": 1,
+      "faiss": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    }
+  ]
+}

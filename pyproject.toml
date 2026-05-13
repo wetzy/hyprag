@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyprag"
+version = "0.1.0"
+description = "Hyperbolic vector index with a FAISS-compatible API, powered by the Poincaré ball."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["hyperbolic", "embeddings", "retrieval", "rag", "poincare", "faiss"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "geoopt>=0.5.0",
+    "faiss-cpu>=1.7.4",
+    "sentence-transformers>=2.7.0",
+    "numpy>=1.24.0",
+    "torch>=2.0.0",   # geoopt hard-requires torch
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov", "ruff", "mypy", "httpx"]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "psutil>=5.9"]
+bench = ["psutil>=5.9"]
+summarize = ["anthropic>=0.40"]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/hyprag"
+Repository = "https://github.com/yourusername/hyprag"
+Issues = "https://github.com/yourusername/hyprag/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
