@@ -266,7 +266,7 @@ def run_semantic(
     hi.add(vecs, depths=depths)
 
     # BM25 index — built once, queried per query string
-    print("  Building BM25 index…")
+    print("  Building BM25 index...")
     bm25 = BM25Index()
     bm25.build(texts)
 
@@ -538,11 +538,11 @@ def main() -> None:
         raise SystemExit(f"Path not found: {args.cpython_lib}")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading corpus from {args.cpython_lib}…")
+    print(f"Loading corpus from {args.cpython_lib}...")
     chunks, chunk_time = load_corpus(args.cpython_lib)
-    print(f"  → {len(chunks):,} chunks in {chunk_time:.2f}s")
+    print(f"  -> {len(chunks):,} chunks in {chunk_time:.2f}s")
 
-    print("Running structural benchmark…")
+    print("Running structural benchmark...")
     structural = run_structural(chunks, chunk_time)
     (args.out_dir / "structural.json").write_text(
         json.dumps(asdict(structural), indent=2)
@@ -553,7 +553,7 @@ def main() -> None:
         summaries = load_summaries(args.summaries) if args.summaries else None
         if summaries:
             print(f"  Loaded {len(summaries):,} pre-computed summaries from {args.summaries}")
-        print(f"Running semantic benchmark with {args.encoder}…")
+        print(f"Running semantic benchmark with {args.encoder}...")
         try:
             semantic = run_semantic(chunks, args.encoder, summaries)
             (args.out_dir / "semantic.json").write_text(

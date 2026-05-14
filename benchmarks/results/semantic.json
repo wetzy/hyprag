@@ -1,12 +1,16 @@
 {
   "encoder_model": "all-MiniLM-L6-v2",
   "n_queries": 20,
-  "recall_at_k_faiss": 0.059,
-  "precision_at_k_faiss": 0.13,
-  "recall_at_k_hyprag": 0.029,
-  "precision_at_k_hyprag": 0.11,
-  "recall_at_k_hyprag_expanded": 0.09,
-  "precision_at_k_hyprag_expanded": 0.098,
+  "recall_at_k_faiss": 0.102,
+  "precision_at_k_faiss": 0.28,
+  "recall_at_k_hyprag": 0.038,
+  "precision_at_k_hyprag": 0.17,
+  "recall_at_k_hyprag_expanded": 0.195,
+  "precision_at_k_hyprag_expanded": 0.175,
+  "recall_at_k_hybrid": 0.058,
+  "precision_at_k_hybrid": 0.15,
+  "recall_at_k_hybrid_expanded": 0.188,
+  "precision_at_k_hybrid_expanded": 0.178,
   "per_query": [
     {
       "query": "how does asyncio schedule callbacks",
@@ -22,38 +26,62 @@
       "hyprag_expanded": {
         "recall": 0.0,
         "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
       }
     },
     {
       "query": "where is SSL certificate validation",
       "n_relevant_in_corpus": 73,
       "faiss": {
-        "recall": 0.0273972602739726,
-        "precision": 0.4
+        "recall": 0.0410958904109589,
+        "precision": 0.6
       },
       "hyprag": {
-        "recall": 0.0,
-        "precision": 0.0
+        "recall": 0.0136986301369863,
+        "precision": 0.2
       },
       "hyprag_expanded": {
-        "recall": 0.0,
-        "precision": 0.0
+        "recall": 0.0958904109589041,
+        "precision": 0.35
+      },
+      "hybrid": {
+        "recall": 0.0136986301369863,
+        "precision": 0.2
+      },
+      "hybrid_expanded": {
+        "recall": 0.1917808219178082,
+        "precision": 0.7
       }
     },
     {
       "query": "what does the csv DictWriter do",
       "n_relevant_in_corpus": 6,
       "faiss": {
-        "recall": 0.3333333333333333,
-        "precision": 0.4
+        "recall": 0.8333333333333334,
+        "precision": 1.0
       },
       "hyprag": {
         "recall": 0.16666666666666666,
         "precision": 0.2
       },
       "hyprag_expanded": {
+        "recall": 1.0,
+        "precision": 0.3
+      },
+      "hybrid": {
         "recall": 0.16666666666666666,
-        "precision": 0.05
+        "precision": 0.2
+      },
+      "hybrid_expanded": {
+        "recall": 1.0,
+        "precision": 0.3157894736842105
       }
     },
     {
@@ -68,8 +96,16 @@
         "precision": 0.0
       },
       "hyprag_expanded": {
-        "recall": 0.0,
-        "precision": 0.0
+        "recall": 0.5,
+        "precision": 0.05
+      },
+      "hybrid": {
+        "recall": 0.5,
+        "precision": 0.2
+      },
+      "hybrid_expanded": {
+        "recall": 0.5,
+        "precision": 0.05
       }
     },
     {
@@ -86,30 +122,46 @@
       "hyprag_expanded": {
         "recall": 0.0,
         "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
       }
     },
     {
       "query": "how does threading Lock work internally",
       "n_relevant_in_corpus": 26,
       "faiss": {
-        "recall": 0.0,
-        "precision": 0.0
+        "recall": 0.11538461538461539,
+        "precision": 0.6
       },
       "hyprag": {
+        "recall": 0.07692307692307693,
+        "precision": 0.4
+      },
+      "hyprag_expanded": {
+        "recall": 0.3076923076923077,
+        "precision": 0.4
+      },
+      "hybrid": {
         "recall": 0.038461538461538464,
         "precision": 0.2
       },
-      "hyprag_expanded": {
-        "recall": 0.038461538461538464,
-        "precision": 0.05
+      "hybrid_expanded": {
+        "recall": 0.46153846153846156,
+        "precision": 0.6
       }
     },
     {
       "query": "how does pickle handle custom classes",
       "n_relevant_in_corpus": 109,
       "faiss": {
-        "recall": 0.009174311926605505,
-        "precision": 0.2
+        "recall": 0.027522935779816515,
+        "precision": 0.6
       },
       "hyprag": {
         "recall": 0.01834862385321101,
@@ -118,6 +170,14 @@
       "hyprag_expanded": {
         "recall": 0.01834862385321101,
         "precision": 0.1
+      },
+      "hybrid": {
+        "recall": 0.009174311926605505,
+        "precision": 0.2
+      },
+      "hybrid_expanded": {
+        "recall": 0.009174311926605505,
+        "precision": 0.05
       }
     },
     {
@@ -132,6 +192,14 @@
         "precision": 0.0
       },
       "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
         "recall": 0.0,
         "precision": 0.0
       }
@@ -150,6 +218,14 @@
       "hyprag_expanded": {
         "recall": 0.0,
         "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
       }
     },
     {
@@ -164,6 +240,14 @@
         "precision": 0.0
       },
       "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
         "recall": 0.0,
         "precision": 0.0
       }
@@ -182,22 +266,38 @@
       "hyprag_expanded": {
         "recall": 0.0,
         "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
       }
     },
     {
       "query": "how does subprocess Popen launch processes",
       "n_relevant_in_corpus": 42,
       "faiss": {
-        "recall": 0.0,
-        "precision": 0.0
+        "recall": 0.047619047619047616,
+        "precision": 0.4
       },
       "hyprag": {
-        "recall": 0.0,
-        "precision": 0.0
+        "recall": 0.023809523809523808,
+        "precision": 0.2
       },
       "hyprag_expanded": {
-        "recall": 0.0,
-        "precision": 0.0
+        "recall": 0.09523809523809523,
+        "precision": 0.2
+      },
+      "hybrid": {
+        "recall": 0.047619047619047616,
+        "precision": 0.4
+      },
+      "hybrid_expanded": {
+        "recall": 0.14285714285714285,
+        "precision": 0.3
       }
     },
     {
@@ -212,6 +312,14 @@
         "precision": 0.0
       },
       "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
         "recall": 0.0,
         "precision": 0.0
       }
@@ -230,22 +338,38 @@
       "hyprag_expanded": {
         "recall": 0.0,
         "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
       }
     },
     {
       "query": "where is base64 encoding implemented",
       "n_relevant_in_corpus": 26,
       "faiss": {
-        "recall": 0.07692307692307693,
-        "precision": 0.4
+        "recall": 0.19230769230769232,
+        "precision": 1.0
       },
       "hyprag": {
-        "recall": 0.07692307692307693,
-        "precision": 0.4
+        "recall": 0.19230769230769232,
+        "precision": 1.0
       },
       "hyprag_expanded": {
-        "recall": 0.5769230769230769,
-        "precision": 0.75
+        "recall": 0.7692307692307693,
+        "precision": 1.0
+      },
+      "hybrid": {
+        "recall": 0.11538461538461539,
+        "precision": 0.6
+      },
+      "hybrid_expanded": {
+        "recall": 0.34615384615384615,
+        "precision": 0.45
       }
     },
     {
@@ -262,14 +386,22 @@
       "hyprag_expanded": {
         "recall": 0.0,
         "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
       }
     },
     {
       "query": "how does heapq maintain the heap invariant",
       "n_relevant_in_corpus": 18,
       "faiss": {
-        "recall": 0.16666666666666666,
-        "precision": 0.6
+        "recall": 0.2777777777777778,
+        "precision": 1.0
       },
       "hyprag": {
         "recall": 0.2777777777777778,
@@ -278,22 +410,38 @@
       "hyprag_expanded": {
         "recall": 1.0,
         "precision": 1.0
+      },
+      "hybrid": {
+        "recall": 0.2777777777777778,
+        "precision": 1.0
+      },
+      "hybrid_expanded": {
+        "recall": 1.0,
+        "precision": 1.0
       }
     },
     {
       "query": "what does the abc module provide",
       "n_relevant_in_corpus": 17,
       "faiss": {
-        "recall": 0.058823529411764705,
-        "precision": 0.2
+        "recall": 0.0,
+        "precision": 0.0
       },
       "hyprag": {
         "recall": 0.0,
         "precision": 0.0
       },
       "hyprag_expanded": {
+        "recall": 0.11764705882352941,
+        "precision": 0.1
+      },
+      "hybrid": {
         "recall": 0.0,
         "precision": 0.0
+      },
+      "hybrid_expanded": {
+        "recall": 0.11764705882352941,
+        "precision": 0.1
       }
     },
     {
@@ -310,6 +458,14 @@
       "hyprag_expanded": {
         "recall": 0.0,
         "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
       }
     },
     {
@@ -324,6 +480,14 @@
         "precision": 0.0
       },
       "hyprag_expanded": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid": {
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "hybrid_expanded": {
         "recall": 0.0,
         "precision": 0.0
       }
