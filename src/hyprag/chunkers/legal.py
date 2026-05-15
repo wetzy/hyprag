@@ -247,10 +247,12 @@ class GDPRChunker:
         id_counter += 1
 
         emitted_chapters: set[int] = set()
+        seen_arts: set[int] = set()  # each article number once; first occurrence wins
         for art in sorted(articles, key=lambda a: a["num"]):
             art_num = art["num"]
-            if art_num not in _CHAPTER_MAP:
+            if art_num not in _CHAPTER_MAP or art_num in seen_arts:
                 continue
+            seen_arts.add(art_num)
             ch_num, ch_slug = _CHAPTER_MAP[art_num]
             ch_path = f"{root_path}.ch{ch_num}"
 
