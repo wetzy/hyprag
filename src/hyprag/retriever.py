@@ -175,7 +175,7 @@ class HypragRetriever:
             ) from exc
 
         self._encoder = SentenceTransformer(encoder_model)
-        dim: int = self._encoder.get_sentence_embedding_dimension()  # type: ignore[assignment]
+        dim: int = self._encoder.get_embedding_dimension()  # type: ignore[assignment]
 
         self._index = FaissIndex(dim)
         self._chunker = HierarchicalChunker(
