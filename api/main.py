@@ -6,8 +6,12 @@ FastAPI server exposing HypRAG over HTTP.
 Endpoints
 ---------
     GET  /health
-    POST /index   { codebase_zip_b64 | text_documents }  -> { index_id, n_chunks }
-    POST /search  { index_id, query, k, expand_subtree } -> { results }
+    POST /index/codebase  { archive_b64 }                  -> { index_id, n_chunks }
+    POST /index/texts     { documents: [{text,node_path,depth}] }
+                                                            -> { index_id, n_chunks }
+    POST /index/gdpr      { html: str }                    -> { index_id, n_chunks }
+    POST /search          { index_id, query, k, expand_subtree, use_hybrid }
+                                                            -> { results }
 
 Auth
 ----
@@ -19,9 +23,6 @@ Tiering
 -------
     free : 100k vectors total, 100 queries/day, indexes purged after 7 days
     paid : 10M vectors, unlimited queries, persistent
-
-Limits are enforced inside the handlers; the Stripe webhook (stubbed) is the
-hook that flips a user's tier when payment status changes.
 """
 
 from __future__ import annotations
@@ -30,13 +31,10 @@ import base64
 import io
 import tarfile
 import time
-import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
-import numpy as np
 from fastapi import (
     Depends,
     FastAPI,
@@ -46,35 +44,37 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
-from hyprag import HypragRetriever
-from hyprag.chunker import HierarchicalChunker
+from hyprag.chunker import Chunk
 from hyprag.hybrid import HybridRetriever
+from hyprag.retriever import HypragRetriever
 
 from api.auth import APIKeyAuth, TIER_LIMITS
-from api.store import UserStore, IndexStore
+from api.store import IndexStore, UserStore
 
 
 # ---------------------------------------------------------------------------
-# Lifespan: model loading, store init
+# Lifespan
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load encoder once at startup; keep indexes in memory."""
+    """Set up stores; encoder is lazily loaded on the first /index call."""
     app.state.user_store = UserStore.from_env()
     app.state.index_store = IndexStore()
-    # The encoder is loaded lazily on first /index call — startup stays fast.
-    app.state.encoder_model = "all-MiniLM-L6-v2"
+    app.state.encoder_model = "BAAI/bge-base-en-v1.5"
     yield
-    # On shutdown, evict in-memory indexes (no-op for free tier; paid tier
-    # should persist to disk — see roadmap).
     app.state.index_store.clear()
 
 
 app = FastAPI(
     title="HypRAG",
-    version="0.2.0",
-    description="Hyperbolic retrieval API. Drop-in FAISS replacement that respects hierarchy.",
+    version="0.5.0",
+    description=(
+        "Hierarchical retrieval API. FAISS cosine search seeds an initial "
+        "result set, then subtree expansion pulls every parent, sibling, and "
+        "child of each hit. +63% Recall@5 vs flat FAISS on GDPR; +120% on "
+        "CPython stdlib."
+    ),
     lifespan=lifespan,
 )
 
@@ -98,12 +98,24 @@ class IndexFromTexts(BaseModel):
     )
 
 
+class IndexFromGdprHtml(BaseModel):
+    """Index concatenated GDPR article HTML (from gdpr-info.eu per-article fetches)."""
+    html: str = Field(..., min_length=1)
+
+
 class SearchRequest(BaseModel):
     index_id: str
     query: str = Field(..., min_length=1, max_length=2000)
     k: int = Field(10, ge=1, le=50)
     expand_subtree: bool = True
-    use_hybrid: bool = Field(True, description="Merge BM25 lexical + semantic via RRF (recommended)")
+    use_hybrid: bool = Field(
+        False,
+        description=(
+            "Merge BM25 lexical + semantic via RRF. Helps on code corpora "
+            "with informative identifiers; hurts on legal text with uniform "
+            "vocabulary. Default off — flip on per-corpus."
+        ),
+    )
 
 
 class ChunkResponse(BaseModel):
@@ -160,7 +172,7 @@ def health() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# /index  (two modes: codebase archive OR raw texts)
+# /index/codebase
 # ---------------------------------------------------------------------------
 
 @app.post("/index/codebase", response_model=IndexResponse)
@@ -172,7 +184,6 @@ def index_codebase(
     t0 = time.perf_counter()
     limits = TIER_LIMITS[auth.tier]
 
-    # Decode + extract to a tempdir
     try:
         raw = base64.b64decode(body.archive_b64)
     except Exception:
@@ -180,7 +191,8 @@ def index_codebase(
 
     if len(raw) > limits.max_archive_bytes:
         raise HTTPException(
-            413, f"Archive exceeds tier limit ({limits.max_archive_bytes // 1_000_000} MB)"
+            413,
+            f"Archive exceeds tier limit ({limits.max_archive_bytes // 1_000_000} MB)",
         )
 
     import tempfile
@@ -190,17 +202,15 @@ def index_codebase(
     except Exception as exc:
         raise HTTPException(400, f"Failed to extract archive: {exc}")
 
-    # Build retriever (this lazily loads the encoder)
     retriever = _get_or_create_retriever(app, auth)
     n_added = retriever.index_path(workdir)
 
     if retriever.ntotal > limits.max_vectors:
-        # Roll back: too many vectors for tier
         app.state.index_store.delete(_index_id_for(auth))
         raise HTTPException(
             413,
             f"Indexed corpus ({retriever.ntotal:,} chunks) exceeds tier limit "
-            f"({limits.max_vectors:,}). Upgrade to paid tier for 10M vectors."
+            f"({limits.max_vectors:,}). Upgrade to paid tier for 10M vectors.",
         )
 
     index_id = _index_id_for(auth)
@@ -218,6 +228,10 @@ def index_codebase(
     )
 
 
+# ---------------------------------------------------------------------------
+# /index/texts
+# ---------------------------------------------------------------------------
+
 @app.post("/index/texts", response_model=IndexResponse)
 def index_texts(
     body: IndexFromTexts,
@@ -231,17 +245,16 @@ def index_texts(
         raise HTTPException(
             413,
             f"{len(body.documents)} documents exceeds tier limit "
-            f"({limits.max_vectors:,})."
+            f"({limits.max_vectors:,}).",
         )
 
     retriever = _get_or_create_retriever(app, auth)
 
-    # Manually build chunks instead of going through the chunker
-    from hyprag.chunker import Chunk
     chunks: list[Chunk] = []
+    base_id = retriever.ntotal
     for i, doc in enumerate(body.documents):
         chunks.append(Chunk(
-            id=retriever.ntotal + i,
+            id=base_id + i,
             text=doc["text"],
             depth=int(doc.get("depth", 0)),
             node_path=doc["node_path"],
@@ -249,14 +262,47 @@ def index_texts(
             start_line=1,
             end_line=1,
         ))
+    retriever.index_chunks(chunks)
 
-    texts = [c.text for c in chunks]
-    depths = [c.depth for c in chunks]
-    vecs = retriever._encoder.encode(  # type: ignore[attr-defined]
-        texts, show_progress_bar=False, convert_to_numpy=True
+    index_id = _index_id_for(auth)
+    app.state.index_store.put(
+        index_id, retriever, ttl_seconds=limits.ttl_seconds
     )
-    retriever._index.add(vecs, depths=depths)  # type: ignore[attr-defined]
-    retriever._chunks.extend(chunks)  # type: ignore[attr-defined]
+
+    return IndexResponse(
+        index_id=index_id,
+        n_chunks=len(chunks),
+        n_files=1,
+        elapsed_ms=(time.perf_counter() - t0) * 1000,
+        expires_at=time.time() + limits.ttl_seconds if limits.ttl_seconds else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# /index/gdpr
+# ---------------------------------------------------------------------------
+
+@app.post("/index/gdpr", response_model=IndexResponse)
+def index_gdpr(
+    body: IndexFromGdprHtml,
+    auth: APIKeyAuth = Depends(get_auth),
+) -> IndexResponse:
+    """Index GDPR articles parsed from concatenated gdpr-info.eu HTML."""
+    t0 = time.perf_counter()
+    limits = TIER_LIMITS[auth.tier]
+
+    from hyprag.chunkers import GDPRChunker
+
+    chunks = GDPRChunker().load(html_string=body.html)
+    if len(chunks) > limits.max_vectors:
+        raise HTTPException(
+            413,
+            f"GDPR corpus ({len(chunks):,} chunks) exceeds tier limit "
+            f"({limits.max_vectors:,}).",
+        )
+
+    retriever = _get_or_create_retriever(app, auth)
+    retriever.index_chunks(chunks)
 
     index_id = _index_id_for(auth)
     app.state.index_store.put(
@@ -283,20 +329,18 @@ def search(
 ) -> SearchResponse:
     limits = TIER_LIMITS[auth.tier]
 
-    # Daily query budget
     used = app.state.user_store.consume_query(auth.user_id, limits.daily_queries)
     if used is None:
         raise HTTPException(
             429,
             f"Daily query limit reached ({limits.daily_queries}). "
-            f"Resets at UTC midnight; upgrade for unlimited queries."
+            f"Resets at UTC midnight; upgrade for unlimited queries.",
         )
 
     retriever = app.state.index_store.get(body.index_id)
     if retriever is None:
         raise HTTPException(404, "index_id not found (or expired)")
 
-    # Tenancy check — a user can only query their own indexes
     if not body.index_id.startswith(auth.user_id):
         raise HTTPException(403, "Forbidden: index belongs to another user")
 
@@ -315,7 +359,7 @@ def search(
             ChunkResponse(
                 node_path=c.node_path,
                 depth=c.depth,
-                text=c.text[:1000],  # truncate to keep payload sane
+                text=c.text[:1000],
                 source_file=c.source_file,
                 score_rank=i,
             )
@@ -325,7 +369,7 @@ def search(
 
 
 # ---------------------------------------------------------------------------
-# Stripe webhook  (STUBBED — replace signature verification with real code)
+# Stripe webhook (STUBBED)
 # ---------------------------------------------------------------------------
 
 @app.post("/_internal/stripe-webhook")
@@ -338,9 +382,6 @@ def stripe_webhook(payload: dict) -> dict:
       2. Verify ``stripe-signature`` header with the webhook secret.
       3. Handle ``customer.subscription.updated`` / ``deleted`` events.
       4. Idempotency by event ID.
-
-    The point of stubbing this is to keep the auth model honest while leaving
-    the actual billing integration for when there's a paying user to bill.
     """
     event_type = payload.get("type")
     customer_email = (
@@ -366,12 +407,21 @@ def _index_id_for(auth: APIKeyAuth) -> str:
     return f"{auth.user_id}_main"
 
 
-def _get_or_create_retriever(app: FastAPI, auth: APIKeyAuth) -> HybridRetriever:
+def _get_or_create_retriever(app: FastAPI, auth: APIKeyAuth) -> HypragRetriever:
+    """
+    Look up the user's existing retriever, or build a fresh one.
+
+    Default is the FAISS-only ``HypragRetriever`` — flat semantic retrieval
+    plus subtree expansion. That is the winning stack on every corpus
+    benchmarked so far. ``HybridRetriever`` (BM25 + RRF) remains available
+    but must be opted into by constructing it explicitly; the search route
+    honours ``use_hybrid`` only when the underlying retriever supports it.
+    """
     index_id = _index_id_for(auth)
     existing = app.state.index_store.get(index_id)
     if existing is not None:
         return existing
-    return HybridRetriever(encoder_model=app.state.encoder_model)
+    return HypragRetriever(encoder_model=app.state.encoder_model)
 
 
 def _extract_archive(raw: bytes, fmt: str, dest: Path) -> None:

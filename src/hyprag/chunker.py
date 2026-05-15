@@ -12,8 +12,9 @@ Hierarchy levels
                nested fn      functions defined inside a top-level fn
 
 Each Chunk carries a ``node_path`` (e.g. ``"mymod.Parser.chunk_file"``) and a
-``depth`` tag that the PoincareBallIndex uses to place the point on the ball:
-root → near the origin, leaves → near the boundary.
+``depth`` tag. The retriever uses ``node_path``/``parent_path`` for subtree
+expansion after the initial FAISS lookup; ``depth`` is a convenience for
+downstream filtering and reporting.
 
 Chunk text format (retrieval-optimised)
 ----------------------------------------

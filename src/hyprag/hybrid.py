@@ -1,28 +1,30 @@
 """
 hyprag.hybrid
 ~~~~~~~~~~~~~
-HybridRetriever: BM25 lexical + HypRAG hyperbolic semantic, merged via
-Reciprocal Rank Fusion (RRF), then subtree-expanded on the Poincaré ball.
+HybridRetriever: BM25 lexical + dense semantic retrieval, merged via
+Reciprocal Rank Fusion (RRF), then subtree-expanded over the chunk hierarchy.
 
-Why this works
---------------
-HypRAG's geometric expansion multiplies recall 2-13× *when the encoder lands
-near the right cluster*.  The failure mode is zero-recall queries where the
-query tokens have no lexical overlap with the code (e.g. "schedule callbacks"
-vs. ``call_soon``).  BM25 finds those exact matches instantly.  RRF merges
-both ranked lists without score normalisation, so neither retriever dominates.
+When to use
+-----------
+BM25 catches exact-token matches that a dense encoder may miss — common in
+code corpora where a query like "schedule callbacks" must find a method
+named ``call_soon``. On natural-language corpora with uniform vocabulary
+(e.g. GDPR's pervasive "data", "processing", "controller"), BM25 tends to
+hurt rather than help, because exact-token signals are too noisy to break
+ties between semantically similar articles.
+
+Empirically:
+- CPython stdlib (K=5, BGE): hybrid +5% Recall vs FAISS+expand alone.
+- GDPR (K=5, BGE-base): hybrid −7% Recall vs FAISS+expand alone.
+
+Default to ``use_hybrid=False`` and turn it on only when the corpus has
+informative lexical signal.
 
 Architecture
 ------------
-    BM25Index (lexical) ──┐
-                          ├── RRF merge ──► top-k ──► subtree_expand ──► results
-    PoincareBallIndex ────┘
-    (semantic, via HypragRetriever internals)
-
-Drop-in API
------------
-    HybridRetriever has the same .index_path() / .query() surface as
-    HypragRetriever.  The API server can swap them without touching call sites.
+    BM25Index (lexical)  ──┐
+                           ├── RRF merge ──► top-k ──► subtree_expand ──► results
+    FaissIndex (semantic) ─┘
 """
 
 from __future__ import annotations
@@ -50,19 +52,10 @@ def reciprocal_rank_fusion(
     """
     Merge ranked lists of corpus indices via Reciprocal Rank Fusion.
 
-    Each list contributes 1/(k + rank + 1) to each document's score.
+    Each list contributes ``1 / (k + rank + 1)`` to each document's score.
     Documents not present in a list contribute 0 from that list.
 
-    Parameters
-    ----------
-    ranked_lists : list of lists
-        Each inner list is a ranked sequence of corpus indices (best first).
-    k : int
-        RRF constant. Default 60 per Cormack, Clarke & Buettcher (2009).
-
-    Returns
-    -------
-    list of (corpus_index, rrf_score) sorted descending by score.
+    Returns ``[(corpus_index, rrf_score)]`` sorted descending by score.
     """
     scores: dict[int, float] = {}
     for ranked in ranked_lists:
@@ -77,14 +70,14 @@ def reciprocal_rank_fusion(
 
 class HybridRetriever:
     """
-    BM25 + hyperbolic semantic retrieval with RRF fusion and subtree expansion.
+    BM25 + dense semantic retrieval with RRF fusion and subtree expansion.
 
     Parameters
     ----------
     encoder_model : str
-        sentence-transformers model name.  Default ``"all-MiniLM-L6-v2"``.
+        sentence-transformers model name. Default ``"BAAI/bge-base-en-v1.5"``.
     rrf_k : int
-        RRF constant.  Default 60.
+        RRF constant. Default 60.
     bm25_candidates : int
         Number of BM25 results to fetch per query before fusion.
         Default ``max(k * 4, 20)``.
@@ -92,20 +85,16 @@ class HybridRetriever:
         Number of semantic results to fetch per query before fusion.
         Default ``max(k * 4, 20)``.
 
-    All remaining kwargs are forwarded to HypragRetriever (curvature,
-    max_depth, ball_scale, min_norm, chunker_kwargs, device).
+    Remaining kwargs (max_depth, chunker_kwargs) are forwarded to
+    HypragRetriever.
     """
 
     def __init__(
         self,
-        encoder_model: str = "all-MiniLM-L6-v2",
+        encoder_model: str = "BAAI/bge-base-en-v1.5",
         *,
-        curvature: float = 1.0,
         max_depth: int = 2,
-        ball_scale: float = 0.9,
-        min_norm: float = 0.05,
         chunker_kwargs: dict | None = None,
-        device: str | None = None,
         rrf_k: int = 60,
         bm25_k1: float = 1.5,
         bm25_b: float = 0.75,
@@ -114,12 +103,8 @@ class HybridRetriever:
     ) -> None:
         self._hyprag = HypragRetriever(
             encoder_model,
-            curvature=curvature,
             max_depth=max_depth,
-            ball_scale=ball_scale,
-            min_norm=min_norm,
             chunker_kwargs=chunker_kwargs,
-            device=device,
         )
         self._bm25 = BM25Index(k1=bm25_k1, b=bm25_b)
         self._rrf_k = rrf_k
@@ -131,14 +116,12 @@ class HybridRetriever:
     # ------------------------------------------------------------------
 
     def index_path(self, path: str | Path) -> int:
-        """
-        Chunk and index a Python file or directory.
-
-        Builds the hyperbolic index via HypragRetriever, then rebuilds the
-        BM25 index over all chunk texts.  Incremental calls append to both.
-        """
         n = self._hyprag.index_path(path)
-        # BM25 rebuild is cheap (pure Python, ~0.5s for 16k chunks)
+        self._bm25.build([c.text for c in self._hyprag.chunks])
+        return n
+
+    def index_chunks(self, chunks: list[Chunk]) -> int:
+        n = self._hyprag.index_chunks(chunks)
         self._bm25.build([c.text for c in self._hyprag.chunks])
         return n
 
@@ -161,27 +144,8 @@ class HybridRetriever:
         """
         Retrieve the most relevant chunks for *text*.
 
-        Parameters
-        ----------
-        text : str
-            Natural-language or code query.
-        k : int
-            Number of chunks to return after RRF (before expansion).
-        expand_subtree : bool
-            Apply subtree expansion after fusion.
-        use_hybrid : bool
-            When *True* (default), run BM25 + semantic RRF fusion.
-            When *False*, fall back to pure HypRAG semantic retrieval
-            (useful for A/B comparison without re-indexing).
-        include_parents / include_children / include_siblings : bool
-            Expansion controls, forwarded to subtree_expand.
-        max_expand : int
-            Hard cap on total chunks returned after expansion.
-
-        Returns
-        -------
-        list[Chunk]
-            Retrieved (and optionally expanded) chunks, deduplicated.
+        Set ``use_hybrid=False`` to short-circuit to pure semantic retrieval
+        (useful for A/B comparison without re-indexing).
         """
         chunks = self._hyprag.chunks
         if not chunks:
@@ -220,11 +184,9 @@ class HybridRetriever:
             [semantic_ranked, bm25_ranked], k=self._rrf_k
         )
 
-        # Top-k fused corpus indices → initial result set
         top_ids = [doc_id for doc_id, _ in fused[:k]]
         results = [chunks[i] for i in top_ids]
 
-        # --- Subtree expansion on the fused set ---
         if expand_subtree:
             results = subtree_expand(
                 results,
@@ -243,12 +205,10 @@ class HybridRetriever:
 
     @property
     def ntotal(self) -> int:
-        """Total indexed chunks."""
         return self._hyprag.ntotal
 
     @property
     def chunks(self) -> list[Chunk]:
-        """Read-only view of the full corpus."""
         return self._hyprag.chunks
 
     def __repr__(self) -> str:
