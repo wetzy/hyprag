@@ -4,31 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyprag"
-version = "0.1.0"
-description = "Hyperbolic vector index with a FAISS-compatible API, powered by the Poincaré ball."
+version = "0.5.0"
+description = "Hierarchical RAG: FAISS retrieval + subtree expansion over a parent/child chunk hierarchy."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
-keywords = ["hyperbolic", "embeddings", "retrieval", "rag", "poincare", "faiss"]
+keywords = ["embeddings", "retrieval", "rag", "faiss", "hierarchy"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "geoopt>=0.5.0",
     "faiss-cpu>=1.7.4",
     "sentence-transformers>=2.7.0",
     "numpy>=1.24.0",
-    "torch>=2.0.0",   # geoopt hard-requires torch
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov", "ruff", "mypy", "httpx"]
 api = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "psutil>=5.9"]
 bench = ["psutil>=5.9"]
+legal = ["beautifulsoup4>=4.12", "lxml>=5.0", "requests>=2.31"]
 summarize = ["anthropic>=0.40"]
 
 [project.urls]

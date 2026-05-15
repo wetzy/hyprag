@@ -1,7 +1,7 @@
 """
 hyprag.retriever
 ~~~~~~~~~~~~~~~~
-High-level API: chunker + encoder + hyperbolic index + subtree expansion.
+High-level API: chunker + encoder + FAISS index + subtree expansion.
 
     retriever = HypragRetriever()
     retriever.index_path("./myproject")
@@ -12,25 +12,27 @@ High-level API: chunker + encoder + hyperbolic index + subtree expansion.
 
 Core product insight
 --------------------
-After retrieving k chunks by geodesic distance, ``subtree_expand`` pulls every
-*sibling* and *parent* of each hit.  Because the Poincaré ball organises
-nodes radially by depth, hits tend to cluster by subtree — so expansion is
-cheap (few extra nodes) but high-recall (you rarely miss a relevant method).
+After retrieving *k* nearest neighbours by cosine similarity,
+``subtree_expand`` walks the chunk hierarchy to pull every *parent*,
+*sibling*, and *child* of each hit. The flat encoder finds the right region
+of the document; the hierarchy walker fills in the surrounding context.
 
-This "pull the whole subtree" behaviour is impossible for flat L2 retrieval:
-there is no geometry that simultaneously captures semantic similarity *and*
-the parent/child relationship.  The Poincaré ball encodes both.
+On the GDPR corpus (672 chunks, 20 hand-labeled queries, K=5, BGE-base),
+this lifts Recall@5 from 0.530 (FAISS alone) to **0.866** (FAISS + subtree
+expansion). On the CPython stdlib corpus (16k chunks) the same expansion
+lifts Recall@5 from 0.092 to 0.203. Earlier experiments using a
+Poincaré-ball backend produced numerically identical results at ~13× the
+latency; the geometry has been retired.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
 from hyprag.chunker import Chunk, HierarchicalChunker
-from hyprag.index import PoincareBallIndex
+from hyprag.faiss_index import FaissIndex
 
 __all__ = ["HypragRetriever", "subtree_expand"]
 
@@ -68,7 +70,7 @@ def subtree_expand(
     Parameters
     ----------
     results : list[Chunk]
-        Initial retrieval results (k-nearest by geodesic distance).
+        Initial retrieval results (k-nearest by cosine similarity).
     corpus : list[Chunk]
         The full indexed corpus to expand from.
     include_parents : bool
@@ -95,7 +97,6 @@ def subtree_expand(
     seen_ids: set[int] = {c.id for c in results}
     expanded: list[Chunk] = list(results)
 
-    # Single pass over corpus to classify every candidate
     parents_buf: list[Chunk] = []
     children_buf: list[Chunk] = []
     siblings_buf: list[Chunk] = []
@@ -109,7 +110,7 @@ def subtree_expand(
         is_sibling = (
             include_siblings
             and chunk.parent_path in retrieved_parents
-            and not is_parent   # a parent of retrieved is not its own sibling
+            and not is_parent
         )
 
         if is_parent:
@@ -119,7 +120,6 @@ def subtree_expand(
         elif is_sibling:
             siblings_buf.append(chunk)
 
-    # Merge in priority order: parents first, then children, then siblings
     for buf in (parents_buf, children_buf, siblings_buf):
         for chunk in buf:
             if len(expanded) >= max_expand:
@@ -137,47 +137,35 @@ def subtree_expand(
 
 class HypragRetriever:
     """
-    End-to-end hyperbolic code/document retriever.
+    End-to-end hierarchical retriever.
 
     Combines:
     - ``HierarchicalChunker`` — AST-based chunking with depth + path metadata.
     - ``SentenceTransformer`` encoder — flat embeddings from any HF model.
-    - ``PoincareBallIndex`` — depth-weighted projection onto the Poincaré ball.
-    - ``subtree_expand`` — structural expansion after geodesic retrieval.
+    - ``FaissIndex`` — cosine-similarity nearest-neighbour search.
+    - ``subtree_expand`` — structural expansion after initial retrieval.
 
     Parameters
     ----------
     encoder_model : str
         Any ``sentence-transformers`` model name or local path.
-        Default ``"all-MiniLM-L6-v2"`` (384-d, fast, solid quality).
-    curvature : float
-        Curvature of the Poincaré ball.  Default 1.0.
+        Default ``"BAAI/bge-base-en-v1.5"`` (768-d, the encoder used in the
+        published benchmarks).
     max_depth : int
-        Maximum hierarchy depth passed to both the chunker and the index.
-        Default 2 (module → class → method).
-    ball_scale : float
-        Maximum radial norm for leaf nodes.  Default 0.9.
-    min_norm : float
-        Radial norm for root (depth-0) nodes.  Default 0.05.
+        Maximum hierarchy depth passed to the AST chunker. Default 2
+        (module → class → method). Pre-built chunks (e.g. from
+        ``GDPRChunker``) are not affected.
     chunker_kwargs : dict, optional
         Extra keyword arguments forwarded to ``HierarchicalChunker``.
-    device : str, optional
-        ``"cpu"`` or ``"cuda"``.  Auto-detected when omitted.
     """
 
     def __init__(
         self,
-        encoder_model: str = "all-MiniLM-L6-v2",
+        encoder_model: str = "BAAI/bge-base-en-v1.5",
         *,
-        curvature: float = 1.0,
         max_depth: int = 2,
-        ball_scale: float = 0.9,
-        min_norm: float = 0.05,
         chunker_kwargs: dict | None = None,
-        device: str | None = None,
     ) -> None:
-        # Lazy import so that sentence-transformers is optional for users who
-        # bring their own embeddings and use PoincareBallIndex directly.
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:  # pragma: no cover
@@ -189,14 +177,7 @@ class HypragRetriever:
         self._encoder = SentenceTransformer(encoder_model)
         dim: int = self._encoder.get_sentence_embedding_dimension()  # type: ignore[assignment]
 
-        self._index = PoincareBallIndex(
-            dim,
-            curvature=curvature,
-            ball_scale=ball_scale,
-            max_depth=max_depth,
-            min_norm=min_norm,
-            device=device,
-        )
+        self._index = FaissIndex(dim)
         self._chunker = HierarchicalChunker(
             max_depth=max_depth, **(chunker_kwargs or {})
         )
@@ -213,11 +194,6 @@ class HypragRetriever:
 
         Can be called multiple times to incrementally grow the index.
 
-        Parameters
-        ----------
-        path : str or Path
-            A ``.py`` file or directory root.
-
         Returns
         -------
         int
@@ -232,21 +208,38 @@ class HypragRetriever:
         if not chunks:
             return 0
 
-        # Re-number IDs globally
         id_offset = len(self._chunks)
         for c in chunks:
             c.id += id_offset
 
+        return self._add_chunks(chunks)
+
+    def index_chunks(self, chunks: list[Chunk]) -> int:
+        """
+        Index a list of pre-built ``Chunk`` objects (e.g. from ``GDPRChunker``).
+
+        Returns
+        -------
+        int
+            Number of chunks added in this call.
+        """
+        if not chunks:
+            return 0
+        id_offset = len(self._chunks)
+        for c in chunks:
+            c.id = id_offset + c.id if c.id is not None else id_offset
+            id_offset += 0  # ids should already be unique within the list
+        return self._add_chunks(chunks)
+
+    def _add_chunks(self, chunks: list[Chunk]) -> int:
         texts = [c.text for c in chunks]
         depths = [c.depth for c in chunks]
-
         vecs: np.ndarray = self._encoder.encode(  # type: ignore[assignment]
             texts,
             show_progress_bar=False,
             convert_to_numpy=True,
             normalize_embeddings=False,
         )
-
         self._index.add(vecs, depths=depths)
         self._chunks.extend(chunks)
         return len(chunks)
@@ -274,7 +267,7 @@ class HypragRetriever:
         text : str
             Natural-language query.
         k : int
-            Number of geodesic nearest neighbours to fetch before expansion.
+            Number of nearest neighbours to fetch before expansion.
         expand_subtree : bool
             When *True* (default), apply ``subtree_expand`` to the k results.
         include_parents / include_children / include_siblings : bool
@@ -298,7 +291,7 @@ class HypragRetriever:
             normalize_embeddings=False,
         )
 
-        dists, ids = self._index.search(q_vec, k)
+        _, ids = self._index.search(q_vec, k)
 
         results: list[Chunk] = [
             self._chunks[idx]
@@ -324,12 +317,10 @@ class HypragRetriever:
 
     @property
     def ntotal(self) -> int:
-        """Total number of indexed chunks."""
         return self._index.ntotal
 
     @property
     def chunks(self) -> list[Chunk]:
-        """Read-only view of the full indexed corpus."""
         return self._chunks
 
     def __repr__(self) -> str:

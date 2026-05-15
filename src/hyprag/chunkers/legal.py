@@ -75,16 +75,28 @@ class GDPRChunker:
     # Public API
     # ------------------------------------------------------------------
 
-    def load(self, html_path: Path | None = None) -> list[Chunk]:
+    def load(
+        self,
+        html_path: Path | None = None,
+        html_string: str | None = None,
+    ) -> list[Chunk]:
         """
         Load and chunk the GDPR.
 
         Parameters
         ----------
         html_path : Path, optional
-            Path to a locally saved GDPR HTML file.  When omitted the text is
-            fetched from EUR-Lex (requires network access).
+            Path to a locally saved GDPR HTML file.
+        html_string : str, optional
+            Raw HTML passed in-process (e.g. through an HTTP request body).
+            Takes precedence over ``html_path``.
+
+        When both are omitted the text is fetched from EUR-Lex (requires
+        network access; the live site sits behind Cloudflare so this is
+        unreliable — prefer per-article curl + concatenation upstream).
         """
+        if html_string is not None:
+            return self._parse(html_string)
         text = self._fetch(html_path)
         return self._parse(text)
 
