@@ -139,6 +139,19 @@ class IndexResponse(BaseModel):
     n_files: int
     elapsed_ms: float
     expires_at: float | None = None
+    depth_distribution: dict[int, int] = Field(
+        default_factory=dict,
+        description=(
+            "Histogram of chunk depths after indexing. Lets a caller verify "
+            "the chunker recovered the document hierarchy as expected — e.g. "
+            "a GDPR index with depth-2=99 confirms all articles were parsed, "
+            "while depth-3=0 signals the paragraph parser failed silently."
+        ),
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal issues detected during indexing (empty on success).",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -219,12 +232,15 @@ def index_codebase(
     )
 
     n_files = len({c.source_file for c in retriever.chunks})
+    dist, warnings = _summarize_chunks(retriever.chunks[-n_added:])
     return IndexResponse(
         index_id=index_id,
         n_chunks=n_added,
         n_files=n_files,
         elapsed_ms=(time.perf_counter() - t0) * 1000,
         expires_at=time.time() + limits.ttl_seconds if limits.ttl_seconds else None,
+        depth_distribution=dist,
+        warnings=warnings,
     )
 
 
@@ -269,12 +285,15 @@ def index_texts(
         index_id, retriever, ttl_seconds=limits.ttl_seconds
     )
 
+    dist, warnings = _summarize_chunks(chunks)
     return IndexResponse(
         index_id=index_id,
         n_chunks=len(chunks),
         n_files=1,
         elapsed_ms=(time.perf_counter() - t0) * 1000,
         expires_at=time.time() + limits.ttl_seconds if limits.ttl_seconds else None,
+        depth_distribution=dist,
+        warnings=warnings,
     )
 
 
@@ -309,12 +328,22 @@ def index_gdpr(
         index_id, retriever, ttl_seconds=limits.ttl_seconds
     )
 
+    dist, warnings = _summarize_chunks(chunks)
+    # GDPR-specific sanity checks beyond the generic ones
+    n_articles = dist.get(2, 0)
+    if 0 < n_articles < 95:
+        warnings.append(
+            f"only {n_articles} articles parsed (expected 99) — input HTML may be truncated"
+        )
+
     return IndexResponse(
         index_id=index_id,
         n_chunks=len(chunks),
         n_files=1,
         elapsed_ms=(time.perf_counter() - t0) * 1000,
         expires_at=time.time() + limits.ttl_seconds if limits.ttl_seconds else None,
+        depth_distribution=dist,
+        warnings=warnings,
     )
 
 
@@ -405,6 +434,28 @@ def stripe_webhook(payload: dict) -> dict:
 def _index_id_for(auth: APIKeyAuth) -> str:
     """One index per user — keep this simple until multi-index is needed."""
     return f"{auth.user_id}_main"
+
+
+def _summarize_chunks(chunks: list[Chunk]) -> tuple[dict[int, int], list[str]]:
+    """
+    Compute the depth histogram and surface obvious chunker failures.
+
+    Warnings flag cases a UI should call out to the user — e.g. only one
+    article parsed when a real GDPR corpus has 99, or an entire depth tier
+    missing in a multi-level hierarchy.
+    """
+    dist: dict[int, int] = {}
+    for c in chunks:
+        dist[c.depth] = dist.get(c.depth, 0) + 1
+
+    warnings: list[str] = []
+    if not chunks:
+        warnings.append("no chunks produced — parser likely failed")
+    elif max(dist) > 0 and len(dist) == 1:
+        warnings.append(
+            f"only one depth tier ({list(dist)[0]}) present — hierarchy not detected"
+        )
+    return dist, warnings
 
 
 def _get_or_create_retriever(app: FastAPI, auth: APIKeyAuth) -> HypragRetriever:
