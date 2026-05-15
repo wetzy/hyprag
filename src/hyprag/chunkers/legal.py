@@ -117,16 +117,204 @@ class GDPRChunker:
         try:
             from bs4 import BeautifulSoup
         except ImportError:
-            raise ImportError("pip install beautifulsoup4 lxml  (needed by GDPRChunker)")
+            raise ImportError("pip install beautifulsoup4  (needed by GDPRChunker)")
 
-        soup = BeautifulSoup(html, "lxml")
+        # html.parser preserves repeated <html>/<body>/<article> blocks when the
+        # input is a concatenation of per-article gdpr-info.eu pages. lxml
+        # collapses them into a single document and loses all but one article.
+        soup = BeautifulSoup(html, "html.parser")
 
-        # Remove script/style noise
-        for tag in soup(["script", "style", "nav", "header", "footer"]):
+        # Remove script/style noise. Don't drop <header>/<footer> globally —
+        # WordPress themes (gdpr-info.eu) wrap the article's <h1> in <header>,
+        # and removing them would erase the article number/title.
+        for tag in soup(["script", "style", "nav"]):
             tag.decompose()
 
+        # Preferred path: gdpr-info.eu HTML — one or more <article> blocks with
+        # an `<h1><span class="dsgvo-number">Art. N GDPR</span>...` heading and
+        # an `<ol>` of paragraphs inside `.entry-content`. Structure is preserved.
+        articles = self._extract_articles_structural(soup)
+        if articles:
+            return self._build_chunks_structural(articles)
+
+        # Fallback: monolithic EUR-Lex text. Paragraphs come through as
+        # "1. text" / "2. text" lines and we recover them via regex.
         raw_text = soup.get_text(separator="\n")
         return self._build_chunks(raw_text)
+
+    # gdpr-info.eu structural parse ------------------------------------
+
+    _ART_NUM_RE = re.compile(r'Art\.\s*(\d+)\s*GDPR', re.IGNORECASE)
+
+    def _extract_articles_structural(self, soup) -> list[dict] | None:
+        """
+        Extract article structure from one or more gdpr-info.eu pages.
+
+        Returns None when the HTML doesn't match the gdpr-info.eu layout, so the
+        caller can fall back to text-based parsing.
+        """
+        articles: list[dict] = []
+
+        for art_el in soup.find_all("article"):
+            h1 = art_el.find("h1")
+            if h1 is None:
+                continue
+            num_span = h1.find(class_="dsgvo-number")
+            if num_span is None:
+                continue
+            m = self._ART_NUM_RE.search(num_span.get_text(" ", strip=True))
+            if not m:
+                continue
+            art_num = int(m.group(1))
+
+            title_span = h1.find(class_="dsgvo-title")
+            art_title = title_span.get_text(" ", strip=True) if title_span else ""
+
+            entry = art_el.find(class_="entry-content")
+            if entry is None:
+                continue
+
+            # Strip the "Suitable Recitals" / navigation block — it lives inside
+            # entry-content but is not part of the article body.
+            for noise in entry.select(
+                ".empfehlung-erwaegungsgruende, .page-navigation, "
+                ".link-to-overview, .feedback"
+            ):
+                noise.decompose()
+
+            paragraphs = self._paragraphs_from_entry(entry)
+            if not paragraphs:
+                continue
+
+            articles.append({
+                "num": art_num,
+                "title": art_title,
+                "paragraphs": paragraphs,
+            })
+
+        return articles if articles else None
+
+    def _paragraphs_from_entry(self, entry) -> list[dict]:
+        """
+        Walk `.entry-content`, return paragraphs as
+        ``[{"text": str, "points": [(letter, str), ...]}, ...]``.
+        """
+        top_ol = entry.find("ol", recursive=False)
+        if top_ol is None:
+            # Some articles are a single prose block with no <ol> (e.g. Art. 1).
+            text = self._clean_text(entry.get_text(" ", strip=True))
+            return [{"text": text, "points": []}] if text else []
+
+        paragraphs: list[dict] = []
+        for li in top_ol.find_all("li", recursive=False):
+            # Lettered sub-points are a nested <ol> inside this <li>.
+            nested = li.find("ol", recursive=False)
+            points: list[tuple[str, str]] = []
+            if nested is not None:
+                for idx, sub_li in enumerate(nested.find_all("li", recursive=False)):
+                    letter = chr(ord("a") + idx) if idx < 26 else f"x{idx}"
+                    points.append(
+                        (letter, self._clean_text(sub_li.get_text(" ", strip=True)))
+                    )
+                nested.decompose()  # remove so sub-points don't leak into parent text
+
+            text = self._clean_text(li.get_text(" ", strip=True))
+            if text:
+                paragraphs.append({"text": text, "points": points})
+
+        return paragraphs
+
+    @staticmethod
+    def _clean_text(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip()
+
+    def _build_chunks_structural(self, articles: list[dict]) -> list[Chunk]:
+        chunks: list[Chunk] = []
+        id_counter = 0
+        root_path = "gdpr"
+
+        chunks.append(Chunk(
+            id=id_counter,
+            text=(
+                "gdpr\n"
+                "REGULATION (EU) 2016/679 — General Data Protection Regulation\n\n"
+                "EU regulation on the protection of natural persons with regard to "
+                "the processing of personal data and on the free movement of such data."
+            ),
+            depth=0, node_path=root_path, source_file="gdpr-info.eu",
+            start_line=1, end_line=1,
+        ))
+        id_counter += 1
+
+        emitted_chapters: set[int] = set()
+        for art in sorted(articles, key=lambda a: a["num"]):
+            art_num = art["num"]
+            if art_num not in _CHAPTER_MAP:
+                continue
+            ch_num, ch_slug = _CHAPTER_MAP[art_num]
+            ch_path = f"{root_path}.ch{ch_num}"
+
+            if ch_num not in emitted_chapters:
+                ch_label = ch_slug.replace("_", " ").title()
+                chunks.append(Chunk(
+                    id=id_counter,
+                    text=f"{ch_path}\nChapter {ch_num} — {ch_label}",
+                    depth=1, node_path=ch_path, source_file="gdpr-info.eu",
+                    start_line=art_num, end_line=art_num,
+                ))
+                id_counter += 1
+                emitted_chapters.add(ch_num)
+
+            art_header = f"Article {art_num}"
+            art_title = art["title"]
+            art_path = f"{ch_path}.art{art_num}"
+            full_body = " ".join(p["text"] for p in art["paragraphs"])
+
+            chunks.append(Chunk(
+                id=id_counter,
+                text=(
+                    f"{art_path}\n{art_header}"
+                    + (f" — {art_title}" if art_title else "")
+                    + f"\n\n{full_body[:600]}"
+                ),
+                depth=2, node_path=art_path, source_file="gdpr-info.eu",
+                start_line=art_num, end_line=art_num,
+            ))
+            id_counter += 1
+
+            for para_idx, para in enumerate(art["paragraphs"], 1):
+                if len(para["text"]) < self.min_para_chars:
+                    continue
+                para_path = f"{art_path}.p{para_idx}"
+                chunks.append(Chunk(
+                    id=id_counter,
+                    text=(
+                        f"{para_path}\n{art_header}"
+                        + (f" — {art_title}" if art_title else "")
+                        + f", paragraph {para_idx}\n\n{para['text']}"
+                    ),
+                    depth=3, node_path=para_path, source_file="gdpr-info.eu",
+                    start_line=art_num, end_line=art_num,
+                ))
+                id_counter += 1
+
+                for letter, ptxt in para["points"]:
+                    if len(ptxt) < self.min_para_chars:
+                        continue
+                    point_path = f"{para_path}.p{letter}"
+                    chunks.append(Chunk(
+                        id=id_counter,
+                        text=(
+                            f"{point_path}\n{art_header} §{para_idx}({letter})\n\n{ptxt}"
+                        ),
+                        depth=4, node_path=point_path, source_file="gdpr-info.eu",
+                        start_line=art_num, end_line=art_num,
+                    ))
+                    id_counter += 1
+
+        for idx, c in enumerate(chunks):
+            c.id = idx
+        return chunks
 
     def _build_chunks(self, text: str) -> list[Chunk]:
         chunks: list[Chunk] = []
