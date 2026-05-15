@@ -15,16 +15,19 @@ Drop-in replacement pattern
     index.add(vectors)
     distances, ids = index.search(query, k)
 
-Depth-weighted projection
---------------------------
-Pass ``depths`` to ``.add()`` to encode hierarchy into geometry:
+Lift behaviour
+---------------
+Vectors are mapped onto the open Poincaré ball via the exponential map at
+the origin (``expmap0``).  The map preserves both *direction* and *relative
+magnitude* of the input — a larger input vector lands further from the
+origin (closer to the boundary, where geodesic distance grows).
 
-    index.add(vectors, depths=[0, 1, 1, 2, 2, 2])
-
-depth 0 (module roots) → small Euclidean norm before expmap0 → near center.
-depth max_depth (leaves) → norm ≈ ball_scale → near the boundary.
-This means the Poincaré ball radius carries semantic meaning: *how specific*
-a node is, not just *how similar*.
+The ``depths`` argument to ``.add()`` is accepted for backward compatibility
+but no longer alters geometry.  Prior versions forced every depth-N node to
+a fixed pre-expmap norm, which (a) discarded the magnitude signal encoded
+by sentence-embedding models and (b) destroyed query/document symmetry
+because queries had no depth.  Depth is now a chunk annotation only; use
+it downstream (e.g. subtree expansion) rather than inside the lift.
 """
 
 from __future__ import annotations
@@ -55,16 +58,16 @@ class PoincareBallIndex:
         Curvature of the Poincaré ball (positive scalar, default 1.0).
         Higher values → stronger hyperbolic distortion.
     ball_scale : float
-        Maximum Euclidean norm before expmap0.  Points with ``depth == max_depth``
-        are placed at this radius.  Must be in (0, 1).  Default 0.9.
+        Pre-expmap scaling factor applied to every input vector.  Must be in
+        (0, 1).  Default 0.9.  Inputs of typical magnitude (≈ 1) then land at
+        post-expmap norm ≈ tanh(0.9) ≈ 0.716 — comfortably away from the
+        boundary, where float32 geodesic distance becomes ill-conditioned.
     max_depth : int
-        The maximum depth value expected in your hierarchy (default 2 for the
-        module → class → method three-level scheme).  Used to compute per-node
-        norm when ``depths`` is supplied to ``.add()``.
+        Retained for backward compatibility.  No longer affects the lift —
+        depth is no longer encoded geometrically.  Default 2.
     min_norm : float
-        Euclidean norm used for depth-0 (root) nodes.  Must satisfy
-        ``0 < min_norm < ball_scale``.  Default 0.05 places roots close to
-        the origin so subtree structure fans outward naturally.
+        Retained for backward compatibility.  No longer affects the lift.
+        Must still satisfy ``0 < min_norm < ball_scale``.  Default 0.05.
     device : str
         ``"cpu"`` or ``"cuda"``.  Defaults to CUDA when available.
     """
@@ -122,11 +125,12 @@ class PoincareBallIndex:
             Shape ``(n, dim)``, dtype float32 or float64.
             Can be called multiple times; items are appended (FAISS semantics).
         depths : sequence of int, optional
-            Hierarchy depth for each vector.  When supplied, the Euclidean norm
-            before expmap0 is linearly interpolated from ``min_norm`` (depth 0)
-            to ``ball_scale`` (depth ``max_depth``), encoding hierarchy into
-            radial position on the ball.  When omitted every vector is placed
-            at ``ball_scale`` (backward-compatible with depth-free usage).
+            Accepted and shape-validated for backward compatibility, but no
+            longer used by the geometry.  Earlier versions interpolated a
+            per-node pre-expmap norm from depth; that step destroyed both the
+            input magnitude signal and query/document symmetry (see module
+            docstring).  Pass it freely if you have it — the index will
+            simply ignore it.
         """
         vectors = _coerce(vectors, self.dim)
 
@@ -230,44 +234,38 @@ class PoincareBallIndex:
     def _lift(
         self,
         flat: np.ndarray,
-        depths: np.ndarray | None,
+        depths: np.ndarray | None = None,
     ) -> torch.Tensor:
         """
         Map flat ℝ^d vectors → Poincaré ball via expmap0.
 
-        Steps
-        -----
-        1. L2-normalise each vector to the unit sphere (direction preserved).
-        2. Scale norms:
-           - Without depth metadata: uniform ``ball_scale``.
-           - With depth metadata: linear interpolation from ``_min_norm``
-             (depth 0) to ``ball_scale`` (depth ``max_depth``), clamped to
-             [_min_norm, ball_scale].  This encodes hierarchy radially so that
-             root nodes cluster near the origin and leaves fan toward the edge.
-        3. Apply expmap0: the Riemannian exponential map at the origin
-           (identity on the unit ball in the Poincaré model, but geoopt's
-           implementation applies the correct conformal factor).
+        Implementation
+        --------------
+            x = expmap0(ball_scale · v)
 
-        The resulting manifold points satisfy ``‖x‖ < 1``.
+        The exponential map at the origin sends the entire tangent space ℝ^d
+        into the open unit Poincaré ball — for c=1 it is
+        ``tanh(‖v‖) · v / ‖v‖`` — so the output norm is always strictly less
+        than 1 regardless of the input magnitude.
+
+        Properties preserved by this transform:
+
+        * **Direction.**  expmap0 is radial; rotating the input rotates the
+          output by the same orthogonal transformation.
+        * **Relative magnitude.**  ``‖x_a‖ < ‖x_b‖`` iff ``‖v_a‖ < ‖v_b‖``.
+          Two inputs that share a direction but differ in magnitude land at
+          different points on the ball — the larger one is closer to the
+          boundary, with strictly greater geodesic distance from the origin.
+        * **Query/document symmetry.**  The same transform is applied to
+          stored vectors and to queries, so the identity vector retrieves
+          itself at distance 0 regardless of any per-document metadata.
+
+        The ``depths`` parameter is accepted for backward compatibility and
+        is intentionally ignored (see module docstring).
         """
+        del depths  # accepted for API compat, intentionally unused
         t = torch.tensor(flat, dtype=torch.float32, device=self.device)
-
-        # Step 1: L2-normalise → unit direction vectors
-        norms = t.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-        t_unit = t / norms
-
-        # Step 2: scale to target norm
-        if depths is not None:
-            d = torch.tensor(depths, dtype=torch.float32, device=self.device)
-            # Linear: depth 0 → _min_norm, depth max_depth → ball_scale
-            alpha = (d / max(self.max_depth, 1)).clamp(0.0, 1.0)
-            target_norm = self._min_norm + (self.ball_scale - self._min_norm) * alpha
-            t_scaled = t_unit * target_norm.unsqueeze(-1)
-        else:
-            t_scaled = t_unit * self.ball_scale
-
-        # Step 3: exponential map at origin
-        return self.manifold.expmap0(t_scaled)
+        return self.manifold.expmap0(t * self.ball_scale)
 
     def __repr__(self) -> str:
         return (
