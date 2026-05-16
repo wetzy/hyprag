@@ -31,9 +31,9 @@ legal = ["beautifulsoup4>=4.12", "lxml>=5.0", "requests>=2.31"]
 summarize = ["anthropic>=0.40"]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/hyprag"
-Repository = "https://github.com/yourusername/hyprag"
-Issues = "https://github.com/yourusername/hyprag/issues"
+Homepage = "https://github.com/wetzy/hyprag"
+Repository = "https://github.com/wetzy/hyprag"
+Issues = "https://github.com/wetzy/hyprag/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
