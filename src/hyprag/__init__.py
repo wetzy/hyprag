@@ -83,4 +83,4 @@ __all__ = [
     "fetch_url",
     "sniff_kind",
 ]
-__version__ = "0.7.0"
+__version__ = "0.7.1"
