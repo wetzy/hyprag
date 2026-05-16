@@ -44,25 +44,47 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 # trailing space and title text.
 _NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.+)$")
 
-# Word-prefixed headings: "Chapter 3 - Title", "Article 17", "Section IV"
+# Word-prefixed headings — English and Spanish (BOE/EU legal documents).
+# Accented variants handled via character classes so OCR-dropped accents
+# still match: "art[ií]culo" catches both "artículo" and "articulo".
 _WORD_HEADING_RE = re.compile(
-    r"^(chapter|article|section|part|title)\s+([IVXLCDM\d]+)\b[\s\-:.]*(.*)$",
-    re.IGNORECASE,
+    r"^("
+    # English
+    r"chapter|article|section|part|title"
+    # Spanish
+    r"|cap[ií]tulo"           # capítulo / capitulo
+    r"|art[ií]culo"           # artículo / articulo
+    r"|secci[oó]n"            # sección / seccion
+    r"|parte"                 # parte (part)
+    r"|t[ií]tulo"             # título / titulo
+    r"|disposici[oó]n"        # disposición / disposicion
+    r"|anexo"                 # anexo (annex)
+    r")\s+"
+    r"([IVXLCDM\d]+[a-z]?)\b[\s\-:.]*(.*)$",
+    re.IGNORECASE | re.UNICODE,
 )
-_WORD_HEADING_DEPTH = {
-    "title": 1,
-    "part": 1,
-    "chapter": 1,
-    "section": 2,
-    "article": 2,
+_WORD_HEADING_DEPTH: dict[str, int] = {
+    # English
+    "title": 1, "part": 1, "chapter": 1, "section": 2, "article": 2,
+    # Spanish — normalised (accents stripped for lookup)
+    "titulo": 1, "parte": 1, "capitulo": 1,
+    "seccion": 2, "articulo": 2, "disposicion": 2, "anexo": 3,
 }
 
-# Short all-caps line as section break heuristic.
-_ALLCAPS_RE = re.compile(r"^[A-Z][A-Z0-9 ,\-:'/]{2,79}$")
+# Short all-caps line as section break heuristic (works for both languages).
+_ALLCAPS_RE = re.compile(r"^[A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑ0-9 ,\-:'/]{2,79}$", re.UNICODE)
+
+
+def _strip_accents(text: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFD", text)
+        if unicodedata.category(c) != "Mn"
+    )
 
 
 def _slug(text: str, max_len: int = 32) -> str:
-    s = _SLUG_RE.sub("-", text.lower()).strip("-")
+    s = _SLUG_RE.sub("-", _strip_accents(text).lower()).strip("-")
     return (s[:max_len] or "section").rstrip("-")
 
 
@@ -165,13 +187,16 @@ class PDFChunker:
 
         m_word = _WORD_HEADING_RE.match(stripped)
         if m_word:
-            kind = m_word.group(1).lower()
+            kind_raw = m_word.group(1).lower()
             number = m_word.group(2)
             tail = m_word.group(3).strip()
-            title = f"{kind.title()} {number}"
+            title = f"{kind_raw.title()} {number}"
             if tail:
                 title = f"{title} - {tail}"
-            return _WORD_HEADING_DEPTH[kind], title
+            # Normalise accents for depth lookup (artículo → articulo, etc.)
+            kind_key = _strip_accents(kind_raw)
+            depth = _WORD_HEADING_DEPTH.get(kind_key, 2)
+            return depth, title
 
         m_num = _NUMBERED_RE.match(stripped)
         if m_num:
