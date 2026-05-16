@@ -102,8 +102,12 @@ class HTMLChunker:
         for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
             tag.decompose()
 
-        body = soup.body or soup
-        sections = self._build_section_tree(body)
+        # Walk the WHOLE soup, not soup.body. ``soup.body`` returns only the
+        # first <body> tag; concatenated multi-document HTML (e.g. the GDPR
+        # corpus of 99 stacked <html><body>...</body></html> pages) has 99
+        # body tags and we need to traverse them all. ``soup.descendants``
+        # covers everything.
+        sections = self._build_section_tree(soup)
 
         title = (
             doc_title
