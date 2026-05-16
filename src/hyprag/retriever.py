@@ -233,11 +233,16 @@ class HypragRetriever:
 
     def index_texts(self, texts: list[str], root_slug: str = "text") -> int:
         """
-        Index a plain list of strings as flat depth-0 chunks.
+        Index a plain list of strings as flat, root-level chunks.
 
-        Convenience method for quick experimentation — no hierarchy, every
-        string becomes its own chunk at depth 0 with a sequential node_path
-        (``text.0``, ``text.1``, …).
+        Convenience method for quick experimentation. Each string becomes its
+        own chunk at depth 0 with a unique root-level ``node_path``
+        (``text0``, ``text1``, …) and **no parent**. Because they share no
+        common parent, ``subtree_expand`` will not link them as siblings —
+        a flat list of strings is treated as a flat list of strings.
+
+        For real hierarchical indexing, use ``index_path`` (Python source)
+        or ``index_chunks`` with ``Chunk`` objects from a chunker.
 
         Returns
         -------
@@ -252,7 +257,7 @@ class HypragRetriever:
                 id=id_offset + i,
                 text=t,
                 depth=0,
-                node_path=f"{root_slug}.{i}",
+                node_path=f"{root_slug}{i}",
                 source_file="",
                 start_line=0,
                 end_line=0,
