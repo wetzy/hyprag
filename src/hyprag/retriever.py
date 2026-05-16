@@ -10,23 +10,23 @@ High-level API: chunker + encoder + FAISS index + subtree expansion.
     for chunk in results:
         print(chunk.node_path, chunk.start_line)
 
+For richer downstream control, request metadata:
+
+    results = retriever.query(text, k=5, return_metadata=True)
+    for r in results:
+        print(r.score, r.relation, r.chunk.node_path)
+
 Core product insight
 --------------------
 After retrieving *k* nearest neighbours by cosine similarity,
 ``subtree_expand`` walks the chunk hierarchy to pull every *parent*,
 *sibling*, and *child* of each hit. The flat encoder finds the right region
 of the document; the hierarchy walker fills in the surrounding context.
-
-On the GDPR corpus (672 chunks, 20 hand-labeled queries, K=5, BGE-base),
-this lifts Recall@5 from 0.530 (FAISS alone) to **0.866** (FAISS + subtree
-expansion). On the CPython stdlib corpus (16k chunks) the same expansion
-lifts Recall@5 from 0.092 to 0.203. Earlier experiments using a
-Poincaré-ball backend produced numerically identical results at ~13× the
-latency; the geometry has been retired.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -34,12 +34,124 @@ import numpy as np
 from hyprag.chunker import Chunk, HierarchicalChunker
 from hyprag.faiss_index import FaissIndex
 
-__all__ = ["HypragRetriever", "subtree_expand"]
+__all__ = [
+    "HypragRetriever",
+    "RetrievalResult",
+    "subtree_expand",
+]
+
+
+# ---------------------------------------------------------------------------
+# Result type
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RetrievalResult:
+    """
+    A single chunk returned from ``HypragRetriever.query(..., return_metadata=True)``.
+
+    Attributes
+    ----------
+    chunk : Chunk
+        The retrieved chunk.
+    score : float
+        Cosine similarity to the query in ``[0.0, 1.0]``. For seeds this is
+        always the FAISS similarity. For expanded chunks (parents, siblings,
+        children) it is the FAISS similarity if ``rescore_after_expand=True``
+        was passed, else ``float('nan')``.
+    relation : str
+        One of ``"seed"``, ``"parent"``, ``"sibling"``, ``"child"``.
+        ``"seed"`` means the chunk was returned by the initial FAISS search.
+    seed_path : str
+        ``node_path`` of the seed chunk that pulled this chunk in via
+        ``subtree_expand``. Empty for seeds themselves.
+    """
+
+    chunk: Chunk
+    score: float
+    relation: str
+    seed_path: str
 
 
 # ---------------------------------------------------------------------------
 # Subtree expansion
 # ---------------------------------------------------------------------------
+
+def _expand_with_metadata(
+    seeds: list[Chunk],
+    corpus: list[Chunk],
+    *,
+    include_parents: bool,
+    include_children: bool,
+    include_siblings: bool,
+    max_expand: int,
+) -> list[tuple[Chunk, str, str]]:
+    """
+    Internal: expand seeds with the full corpus and tag each expanded chunk
+    with its relation (``"parent"``/``"child"``/``"sibling"``) and the
+    ``node_path`` of the seed that pulled it in.
+
+    Returns a list of ``(chunk, relation, seed_path)`` tuples. The seeds
+    themselves come first, tagged ``"seed"`` with empty ``seed_path``.
+    Order after seeds: parents, children, siblings (corpus order within
+    each group).
+    """
+    if not seeds:
+        return []
+
+    # Maps from node_path/parent_path → seed.node_path so we can attribute
+    # each expanded chunk back to a specific seed. If a chunk matches
+    # multiple seeds, the first seed wins.
+    parent_of_seed: dict[str, str] = {}   # seed.parent_path → seed.node_path
+    seeds_by_path: dict[str, str] = {}    # seed.node_path → seed.node_path
+    siblings_by_parent: dict[str, str] = {}  # seed.parent_path → seed.node_path
+
+    for s in seeds:
+        seeds_by_path.setdefault(s.node_path, s.node_path)
+        if s.parent_path:
+            parent_of_seed.setdefault(s.parent_path, s.node_path)
+            siblings_by_parent.setdefault(s.parent_path, s.node_path)
+
+    seen_ids: set[int] = {c.id for c in seeds}
+    out: list[tuple[Chunk, str, str]] = [(c, "seed", "") for c in seeds]
+
+    parents_buf: list[tuple[Chunk, str, str]] = []
+    children_buf: list[tuple[Chunk, str, str]] = []
+    siblings_buf: list[tuple[Chunk, str, str]] = []
+
+    for chunk in corpus:
+        if chunk.id in seen_ids:
+            continue
+
+        if include_parents and chunk.node_path in parent_of_seed:
+            parents_buf.append((chunk, "parent", parent_of_seed[chunk.node_path]))
+            continue
+
+        if include_children and chunk.parent_path in seeds_by_path:
+            children_buf.append(
+                (chunk, "child", seeds_by_path[chunk.parent_path])
+            )
+            continue
+
+        if (
+            include_siblings
+            and chunk.parent_path
+            and chunk.parent_path in siblings_by_parent
+        ):
+            siblings_buf.append(
+                (chunk, "sibling", siblings_by_parent[chunk.parent_path])
+            )
+
+    for buf in (parents_buf, children_buf, siblings_buf):
+        for item in buf:
+            if len(out) >= max_expand:
+                return out
+            if item[0].id not in seen_ids:
+                out.append(item)
+                seen_ids.add(item[0].id)
+
+    return out
+
 
 def subtree_expand(
     results: list[Chunk],
@@ -57,14 +169,14 @@ def subtree_expand(
     adds chunks that are:
 
     - **Children** — chunks whose ``parent_path`` matches a retrieved
-      ``node_path``.  This "pulls the subtree down".
+      ``node_path``. This "pulls the subtree down".
     - **Parents** — the chunk whose ``node_path`` matches a retrieved
-      ``parent_path``.  Provides context for the hit.
+      ``parent_path``. Provides context for the hit.
     - **Siblings** — chunks sharing the same ``parent_path`` as a retrieved
-      chunk.  Useful when one method of a class is relevant and you want the
+      chunk. Useful when one method of a class is relevant and you want the
       whole class API surface.
 
-    All three behaviours are enabled by default.  Each can be disabled
+    All three behaviours are enabled by default. Each can be disabled
     independently.
 
     Parameters
@@ -73,62 +185,28 @@ def subtree_expand(
         Initial retrieval results (k-nearest by cosine similarity).
     corpus : list[Chunk]
         The full indexed corpus to expand from.
-    include_parents : bool
-        Pull the direct parent of each retrieved chunk.
-    include_children : bool
-        Pull all direct children of each retrieved chunk.
-    include_siblings : bool
-        Pull all nodes sharing the same parent as each retrieved chunk.
+    include_parents / include_children / include_siblings : bool
+        Toggle which structural relations to pull in.
     max_expand : int
         Hard cap on the total number of chunks returned.
 
     Returns
     -------
     list[Chunk]
-        Deduplicated, expanded list.  Order: original results first, then
-        parents, then children/siblings (corpus-order within each group).
+        Deduplicated, expanded list. Order: original results first, then
+        parents, then children, then siblings (corpus-order within each group).
     """
-    if not results:
-        return []
-
-    retrieved_paths: set[str] = {c.node_path for c in results}
-    retrieved_parents: set[str] = {c.parent_path for c in results if c.parent_path}
-
-    seen_ids: set[int] = {c.id for c in results}
-    expanded: list[Chunk] = list(results)
-
-    parents_buf: list[Chunk] = []
-    children_buf: list[Chunk] = []
-    siblings_buf: list[Chunk] = []
-
-    for chunk in corpus:
-        if chunk.id in seen_ids:
-            continue
-
-        is_parent = include_parents and chunk.node_path in retrieved_parents
-        is_child = include_children and chunk.parent_path in retrieved_paths
-        is_sibling = (
-            include_siblings
-            and chunk.parent_path in retrieved_parents
-            and not is_parent
+    return [
+        c
+        for c, _, _ in _expand_with_metadata(
+            results,
+            corpus,
+            include_parents=include_parents,
+            include_children=include_children,
+            include_siblings=include_siblings,
+            max_expand=max_expand,
         )
-
-        if is_parent:
-            parents_buf.append(chunk)
-        elif is_child:
-            children_buf.append(chunk)
-        elif is_sibling:
-            siblings_buf.append(chunk)
-
-    for buf in (parents_buf, children_buf, siblings_buf):
-        for chunk in buf:
-            if len(expanded) >= max_expand:
-                return expanded
-            if chunk.id not in seen_ids:
-                expanded.append(chunk)
-                seen_ids.add(chunk.id)
-
-    return expanded
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +371,9 @@ class HypragRetriever:
         include_children: bool = True,
         include_siblings: bool = True,
         max_expand: int = 50,
-    ) -> list[Chunk]:
+        rescore_after_expand: bool = False,
+        return_metadata: bool = False,
+    ) -> list[Chunk] | list[RetrievalResult]:
         """
         Retrieve the most relevant chunks for *text*.
 
@@ -302,7 +382,11 @@ class HypragRetriever:
         text : str
             Natural-language query.
         k : int
-            Number of nearest neighbours to fetch before expansion.
+            Number of nearest neighbour **seeds** to fetch before expansion.
+            If ``expand_subtree=True`` (the default) the final list may be
+            longer — every seed's parent/siblings/children are pulled in
+            structurally. Pass ``expand_subtree=False`` if you want strictly
+            ``k`` chunks back.
         expand_subtree : bool
             When *True* (default), apply ``subtree_expand`` to the k results.
         include_parents / include_children / include_siblings : bool
@@ -310,11 +394,25 @@ class HypragRetriever:
             Only used when ``expand_subtree=True``.
         max_expand : int
             Hard cap on the total chunks returned after expansion.
+        rescore_after_expand : bool
+            When *True*, re-encode every expanded chunk against the query and
+            sort the final list by cosine similarity descending. Adds one
+            extra forward pass through the encoder (~1 ms for ~20 chunks).
+
+            Why this matters: structural expansion adds parents/siblings/
+            children in document order, not semantic order. If the answer
+            lives in a *sibling* of the top FAISS hit, it can end up at the
+            bottom of the list. Rescoring promotes it to the top.
+        return_metadata : bool
+            When *True*, return ``list[RetrievalResult]`` carrying per-chunk
+            ``score``, ``relation`` (``"seed"``/``"parent"``/``"sibling"``/
+            ``"child"``), and ``seed_path`` (the seed that pulled it in).
+            When *False* (default), return ``list[Chunk]`` for backward
+            compatibility.
 
         Returns
         -------
-        list[Chunk]
-            Retrieved (and optionally expanded) chunks, deduplicated.
+        list[Chunk] | list[RetrievalResult]
         """
         if not self._chunks:
             raise RuntimeError("Index is empty — call .index_path() first.")
@@ -326,25 +424,56 @@ class HypragRetriever:
             normalize_embeddings=False,
         )
 
-        _, ids = self._index.search(q_vec, k)
+        distances, ids = self._index.search(q_vec, k)
+        seed_similarities: dict[int, float] = {}
+        seeds: list[Chunk] = []
+        for dist, idx in zip(distances[0], ids[0]):
+            if idx == -1:
+                continue
+            seeds.append(self._chunks[idx])
+            seed_similarities[self._chunks[idx].id] = float(1.0 - dist)
 
-        results: list[Chunk] = [
-            self._chunks[idx]
-            for idx in ids[0]
-            if idx != -1
-        ]
+        if not seeds:
+            return []
 
         if expand_subtree:
-            results = subtree_expand(
-                results,
+            tagged = _expand_with_metadata(
+                seeds,
                 self._chunks,
                 include_parents=include_parents,
                 include_children=include_children,
                 include_siblings=include_siblings,
                 max_expand=max_expand,
             )
+        else:
+            tagged = [(c, "seed", "") for c in seeds]
 
-        return results
+        # Build RetrievalResult objects with per-chunk scores
+        results = [
+            RetrievalResult(
+                chunk=chunk,
+                score=seed_similarities.get(chunk.id, float("nan")),
+                relation=relation,
+                seed_path=seed_path,
+            )
+            for chunk, relation, seed_path in tagged
+        ]
+
+        if rescore_after_expand and results:
+            chunk_vecs: np.ndarray = self._encoder.encode(  # type: ignore[assignment]
+                [r.chunk.text for r in results],
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=False,
+            )
+            sims = _cosine_similarity(q_vec[0], chunk_vecs)
+            for r, s in zip(results, sims):
+                r.score = float(s)
+            results.sort(key=lambda r: r.score, reverse=True)
+
+        if return_metadata:
+            return results
+        return [r.chunk for r in results]
 
     # ------------------------------------------------------------------
     # Convenience
@@ -354,14 +483,15 @@ class HypragRetriever:
     def ntotal(self) -> int:
         return self._index.ntotal
 
-    @property
-    def chunks(self) -> list[Chunk]:
-        return self._chunks
 
-    def __repr__(self) -> str:
-        return (
-            f"HypragRetriever("
-            f"ntotal={self.ntotal}, "
-            f"max_depth={self._max_depth}, "
-            f"index={self._index!r})"
-        )
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _cosine_similarity(query: np.ndarray, corpus: np.ndarray) -> np.ndarray:
+    """Cosine similarity of *query* against each row of *corpus*."""
+    q = query / max(float(np.linalg.norm(query)), 1e-12)
+    norms = np.linalg.norm(corpus, axis=1, keepdims=True)
+    norms = np.clip(norms, 1e-12, None)
+    c = corpus / norms
+    return c @ q

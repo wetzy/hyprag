@@ -36,7 +36,7 @@ from hyprag.bm25 import BM25Index
 from hyprag.chunker import Chunk, HierarchicalChunker
 from hyprag.faiss_index import FaissIndex
 from hyprag.hybrid import HybridRetriever, reciprocal_rank_fusion
-from hyprag.retriever import HypragRetriever, subtree_expand
+from hyprag.retriever import HypragRetriever, RetrievalResult, subtree_expand
 from hyprag.summarize import ChunkSummarizer, apply_summaries, load_summaries
 
 __all__ = [
@@ -44,6 +44,7 @@ __all__ = [
     "HierarchicalChunker",
     "FaissIndex",
     "HypragRetriever",
+    "RetrievalResult",
     "subtree_expand",
     "BM25Index",
     "HybridRetriever",
@@ -52,4 +53,4 @@ __all__ = [
     "apply_summaries",
     "load_summaries",
 ]
-__version__ = "0.5.3"
+__version__ = "0.6.0"
