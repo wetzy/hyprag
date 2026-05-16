@@ -130,7 +130,12 @@ class HTMLChunker:
         # ``html.parser`` — see legal.py for the lxml gotcha on
         # concatenated multi-document HTML.
         soup = BeautifulSoup(html, "html.parser")
-        for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
+        # Do NOT remove <header>: article title headings (h1/h2) on sites
+        # like gdpr-info.eu live inside <header> elements. Removing header
+        # would drop the article title and leave only boilerplate sub-sections
+        # (e.g. "Suitable Recitals") as the only visible headings. <nav> is
+        # kept in the list so navigation lists inside headers are still removed.
+        for tag in soup(["script", "style", "nav", "footer", "aside"]):
             tag.decompose()
 
         # Walk the WHOLE soup, not soup.body. ``soup.body`` returns only
