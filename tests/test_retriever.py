@@ -321,6 +321,87 @@ def test_subtree_expand_returns_list_of_chunks():
     assert paths == {"root", "root.a", "root.b"}
 
 
+# ---------------------------------------------------------------------------
+# min_score: drops low-similarity expanded chunks (keeps seeds)
+# ---------------------------------------------------------------------------
+
+def test_min_score_filters_low_similarity_expanded_chunks(stub_retriever):
+    seed = _make_chunk(0, "root.a", "aaaa main answer")
+    parent = _make_chunk(1, "root", "xxxx no overlap zzzz")
+    sibling_relevant = _make_chunk(2, "root.b", "aaaa relevant sibling")
+    sibling_irrelevant = _make_chunk(3, "root.c", "yyyy unrelated noise zzzz")
+    stub_retriever.index_chunks([seed, parent, sibling_relevant, sibling_irrelevant])
+
+    results = stub_retriever.query(
+        "aaaa",
+        k=1,
+        return_metadata=True,
+        rescore_after_expand=True,
+        min_score=0.3,
+    )
+    paths = {r.chunk.node_path for r in results}
+    # Seed always kept regardless of score
+    assert "root.a" in paths
+    # Low-score chunks dropped
+    for r in results:
+        assert r.relation == "seed" or r.score >= 0.3
+
+
+def test_min_score_zero_keeps_all(stub_retriever):
+    seed = _make_chunk(0, "root.a", "aaaa")
+    parent = _make_chunk(1, "root", "xxxx")
+    sibling = _make_chunk(2, "root.b", "yyyy")
+    stub_retriever.index_chunks([seed, parent, sibling])
+    results = stub_retriever.query(
+        "aaaa",
+        k=1,
+        return_metadata=True,
+        rescore_after_expand=True,
+        min_score=0.0,
+    )
+    # All three should be present
+    assert len(results) == 3
+
+
+# ---------------------------------------------------------------------------
+# Unified r.index() dispatcher
+# ---------------------------------------------------------------------------
+
+def test_index_dispatches_list_of_strings(stub_retriever):
+    n = stub_retriever.index(["aaa bbb", "ccc ddd", "eee fff"])
+    assert n == 3
+    assert {c.node_path for c in stub_retriever._chunks} == {"text0", "text1", "text2"}
+
+
+def test_index_dispatches_plain_text_string(stub_retriever):
+    text = (
+        "First paragraph here, long enough to be a chunk.\n\n"
+        "Second paragraph, also long enough."
+    )
+    n = stub_retriever.index(text)
+    assert n >= 2
+
+
+def test_index_dispatches_markdown_file(stub_retriever, tmp_path):
+    f = tmp_path / "notes.md"
+    f.write_text("# Top\n\nbody content here.", encoding="utf-8")
+    n = stub_retriever.index(str(f))
+    assert n >= 2
+    paths = {c.node_path for c in stub_retriever._chunks}
+    assert "doc.top" in paths
+
+
+def test_index_assigns_unique_ids_across_calls(stub_retriever):
+    stub_retriever.index(["one", "two"])
+    stub_retriever.index(["three", "four"])
+    ids = [c.id for c in stub_retriever._chunks]
+    assert ids == list(range(len(ids)))
+
+
+# ---------------------------------------------------------------------------
+# _expand_with_metadata (unchanged contract)
+# ---------------------------------------------------------------------------
+
 def test_expand_with_metadata_returns_tuples():
     parent = _make_chunk(0, "root", "p")
     seed = _make_chunk(1, "root.a", "s")

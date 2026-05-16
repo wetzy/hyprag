@@ -266,6 +266,48 @@ class HypragRetriever:
     # Indexing
     # ------------------------------------------------------------------
 
+    def index(
+        self,
+        source: "str | Path | list[str]",
+        *,
+        chunker_kwargs: dict | None = None,
+    ) -> int:
+        """
+        Universal entry point — index anything.
+
+        Accepts:
+
+        - **URL** (``http://`` / ``https://``) — fetched, then dispatched
+          by ``Content-Type`` (HTML, PDF, markdown, or plain text).
+        - **File path** — dispatched by extension: ``.html``/``.htm``,
+          ``.md``/``.markdown``, ``.pdf``, ``.py``, or plain text for
+          anything else (``.txt``, ``.rst``, …).
+        - **Directory path** — recurses and dispatches every supported
+          file under it.
+        - **Raw string** — sniffed and routed to ``HTMLChunker`` /
+          ``MarkdownChunker`` / ``TextChunker``.
+        - **List of strings** — each element becomes a flat depth-0
+          chunk (same as ``index_texts``).
+
+        Can be called multiple times to grow the index incrementally.
+
+        Returns
+        -------
+        int
+            Number of chunks added in this call.
+        """
+        from hyprag.sources import chunks_from_source
+
+        chunks = chunks_from_source(source, chunker_kwargs=chunker_kwargs)
+        if not chunks:
+            return 0
+
+        id_offset = len(self._chunks)
+        for c in chunks:
+            c.id = id_offset
+            id_offset += 1
+        return self._add_chunks(chunks)
+
     def index_path(self, path: str | Path) -> int:
         """
         Chunk and index a Python file or directory tree.
@@ -372,6 +414,7 @@ class HypragRetriever:
         include_siblings: bool = True,
         max_expand: int = 50,
         rescore_after_expand: bool = False,
+        min_score: float = 0.0,
         return_metadata: bool = False,
     ) -> list[Chunk] | list[RetrievalResult]:
         """
@@ -403,6 +446,15 @@ class HypragRetriever:
             children in document order, not semantic order. If the answer
             lives in a *sibling* of the top FAISS hit, it can end up at the
             bottom of the list. Rescoring promotes it to the top.
+        min_score : float
+            Drop chunks whose score is below this threshold. Useful for
+            filtering out low-signal sibling expansion (e.g. all entries of
+            a large References section getting pulled in because one of
+            them matched). Seeds are always kept regardless of threshold —
+            they're the guaranteed FAISS hits. Default 0.0 (no filter).
+            Only meaningful with ``rescore_after_expand=True``; without
+            rescore, expanded chunks have NaN scores and would all be
+            dropped, so the filter is only applied when scores are real.
         return_metadata : bool
             When *True*, return ``list[RetrievalResult]`` carrying per-chunk
             ``score``, ``relation`` (``"seed"``/``"parent"``/``"sibling"``/
@@ -470,6 +522,12 @@ class HypragRetriever:
             for r, s in zip(results, sims):
                 r.score = float(s)
             results.sort(key=lambda r: r.score, reverse=True)
+
+            if min_score > 0.0:
+                results = [
+                    r for r in results
+                    if r.relation == "seed" or r.score >= min_score
+                ]
 
         if return_metadata:
             return results
