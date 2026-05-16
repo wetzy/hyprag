@@ -38,6 +38,13 @@ Issues = "https://github.com/yourusername/hyprag/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+# src-layout: make ``import hyprag`` resolve to this checkout's ``src/``
+# rather than any system-installed copy. Required for tests to pick up
+# changes without ``pip install -e .`` first.
+pythonpath = ["src"]
+testpaths = ["tests"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py39"
