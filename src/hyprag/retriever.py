@@ -231,6 +231,36 @@ class HypragRetriever:
             id_offset += 0  # ids should already be unique within the list
         return self._add_chunks(chunks)
 
+    def index_texts(self, texts: list[str], root_slug: str = "text") -> int:
+        """
+        Index a plain list of strings as flat depth-0 chunks.
+
+        Convenience method for quick experimentation — no hierarchy, every
+        string becomes its own chunk at depth 0 with a sequential node_path
+        (``text.0``, ``text.1``, …).
+
+        Returns
+        -------
+        int
+            Number of chunks added.
+        """
+        if not texts:
+            return 0
+        id_offset = len(self._chunks)
+        chunks = [
+            Chunk(
+                id=id_offset + i,
+                text=t,
+                depth=0,
+                node_path=f"{root_slug}.{i}",
+                source_file="",
+                start_line=0,
+                end_line=0,
+            )
+            for i, t in enumerate(texts)
+        ]
+        return self._add_chunks(chunks)
+
     def _add_chunks(self, chunks: list[Chunk]) -> int:
         texts = [c.text for c in chunks]
         depths = [c.depth for c in chunks]

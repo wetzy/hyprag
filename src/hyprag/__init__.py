@@ -52,4 +52,4 @@ __all__ = [
     "apply_summaries",
     "load_summaries",
 ]
-__version__ = "0.5.1"
+__version__ = "0.5.2"
