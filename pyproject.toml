@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyprag"
-version = "0.7.1"
+version = "0.7.2"
 description = "Hierarchical RAG: FAISS retrieval + subtree expansion over a parent/child chunk hierarchy."
 readme = "README.md"
 license = "MIT"
@@ -32,10 +32,20 @@ bench = ["psutil>=5.9"]
 html = ["beautifulsoup4>=4.12"]
 # PDF chunking via pypdf (pure Python, no native deps).
 pdf = ["pypdf>=4.0"]
+# Optional pdfplumber backend for PDFChunker — produces clean text on
+# legal/EU/BOE PDFs that use tracked typography (where pypdf mangles
+# "Artículo" into "Ar tículo"). Heavier dependency (~10 MB).
+pdf-plumber = ["pdfplumber>=0.10"]
 # GDPR/legal chunkers (gdpr-info.eu scraping).
 legal = ["beautifulsoup4>=4.12", "lxml>=5.0", "requests>=2.31"]
 # All optional content types in one extra — convenient for end users.
-all = ["beautifulsoup4>=4.12", "pypdf>=4.0", "lxml>=5.0", "requests>=2.31"]
+all = [
+    "beautifulsoup4>=4.12",
+    "pypdf>=4.0",
+    "pdfplumber>=0.10",
+    "lxml>=5.0",
+    "requests>=2.31",
+]
 summarize = ["anthropic>=0.40"]
 
 [project.urls]

@@ -92,6 +92,11 @@ def _slug(text: str, max_len: int = 32) -> str:
 class _Section:
     level: int
     title: str
+    # ``kind`` records how the heading was detected:
+    #   "word"     — chapter/article/section (absolute level)
+    #   "numbered" — "1.", "2.1.3" (relative to nearest word heading)
+    #   "allcaps"  — short ALL-CAPS line (absolute level 2)
+    kind: str = "word"
     body: list[str] = field(default_factory=list)
     children: list["_Section"] = field(default_factory=list)
 
@@ -111,6 +116,12 @@ class PDFChunker:
         When no headings are detected, fall back to one chunk per page
         at depth 1. Default *True*. Set to *False* to get a single
         depth-0 chunk containing the whole document.
+    backend : str
+        Text-extraction backend. ``"pypdf"`` (default) is pure-Python
+        with no native deps but mangles tracked typography (e.g. BOE
+        and EUR-Lex PDFs render "Artículo" as "Ar tículo").
+        ``"pdfplumber"`` produces clean text on such documents at the
+        cost of a heavier dependency (``pip install pdfplumber``).
     """
 
     def __init__(
@@ -119,10 +130,16 @@ class PDFChunker:
         root_slug: str = "doc",
         min_chunk_chars: int = 40,
         page_fallback: bool = True,
+        backend: str = "pypdf",
     ) -> None:
+        if backend not in ("pypdf", "pdfplumber"):
+            raise ValueError(
+                f"unknown backend {backend!r} — use 'pypdf' or 'pdfplumber'"
+            )
         self.root_slug = root_slug
         self.min_chunk_chars = min_chunk_chars
         self.page_fallback = page_fallback
+        self.backend = backend
 
     # ------------------------------------------------------------------
     # Public API
@@ -151,25 +168,43 @@ class PDFChunker:
     # ------------------------------------------------------------------
 
     def _extract_pages(self, path: Path) -> list[str]:
+        if self.backend == "pdfplumber":
+            try:
+                import pdfplumber
+            except ImportError as exc:
+                raise ImportError(
+                    "pip install pdfplumber  (backend='pdfplumber')"
+                ) from exc
+            with pdfplumber.open(path) as pdf:
+                return [page.extract_text() or "" for page in pdf.pages]
+
         try:
             import pypdf
         except ImportError as exc:
             raise ImportError(
                 "pip install pypdf  (needed by PDFChunker)"
             ) from exc
-
         with open(path, "rb") as fh:
             reader = pypdf.PdfReader(fh)
             return [page.extract_text() or "" for page in reader.pages]
 
     def _extract_pages_from_stream(self, stream) -> list[str]:
+        if self.backend == "pdfplumber":
+            try:
+                import pdfplumber
+            except ImportError as exc:
+                raise ImportError(
+                    "pip install pdfplumber  (backend='pdfplumber')"
+                ) from exc
+            with pdfplumber.open(stream) as pdf:
+                return [page.extract_text() or "" for page in pdf.pages]
+
         try:
             import pypdf
         except ImportError as exc:
             raise ImportError(
                 "pip install pypdf  (needed by PDFChunker)"
             ) from exc
-
         reader = pypdf.PdfReader(stream)
         return [page.extract_text() or "" for page in reader.pages]
 
@@ -177,9 +212,18 @@ class PDFChunker:
     # Heading detection + tree building
     # ------------------------------------------------------------------
 
-    def _classify_line(self, line: str) -> tuple[int, str] | None:
+    def _classify_line(self, line: str) -> tuple[str, int, str] | None:
         """
-        Return (depth, title) if *line* looks like a heading, else None.
+        Return ``(kind, level_or_relative, title)`` if *line* is a heading.
+
+        ``kind`` is one of:
+
+        - ``"word"`` — absolute level (article/chapter/section).
+        - ``"numbered"`` — RELATIVE depth (added to the level of the
+          nearest non-numbered heading above on the stack). This is
+          what fixes BOE-style hierarchies: paragraph "1." inside
+          "Artículo 83" becomes Artículo's child, not a root.
+        - ``"allcaps"`` — absolute level 2 (section break).
         """
         stripped = line.strip()
         if not stripped:
@@ -196,21 +240,20 @@ class PDFChunker:
             # Normalise accents for depth lookup (artículo → articulo, etc.)
             kind_key = _strip_accents(kind_raw)
             depth = _WORD_HEADING_DEPTH.get(kind_key, 2)
-            return depth, title
+            return "word", depth, title
 
         m_num = _NUMBERED_RE.match(stripped)
         if m_num:
             number = m_num.group(1)
             tail = m_num.group(2).strip()
             # Filter: numbered list items vs section numbers. Section
-            # numbers have tails that look like titles (capitalised, no
-            # trailing punctuation). List items usually have lowercase
-            # continuations of an enclosing paragraph.
+            # numbers have tails that look like titles (capitalised, not
+            # too long).
             if not tail or tail[0].islower() or len(tail) > 120:
                 return None
-            depth = number.count(".") + 1
-            depth = max(1, min(depth, 5))
-            return depth, f"{number} {tail}"
+            relative_depth = number.count(".") + 1
+            relative_depth = max(1, min(relative_depth, 4))
+            return "numbered", relative_depth, f"{number} {tail}"
 
         # All-caps short standalone line → section break.
         if (
@@ -218,13 +261,18 @@ class PDFChunker:
             and len(stripped) <= 80
             and len(stripped.split()) <= 12
         ):
-            return 2, stripped.title()
+            return "allcaps", 2, stripped.title()
 
         return None
 
     def _build_tree(self, pages: list[str]) -> tuple[list[_Section], bool]:
         """
         Walk all pages line by line, emit a section tree.
+
+        Numbered headings ("1.", "2.1.3") are made children of the
+        nearest non-numbered heading above them on the stack — so a
+        paragraph "1." inside "Artículo 83" nests at depth 3, not at
+        the root.
 
         Returns (roots, any_heading_found).
         """
@@ -237,10 +285,23 @@ class PDFChunker:
                 cls = self._classify_line(raw)
                 if cls is not None:
                     any_heading = True
-                    level, title = cls
+                    kind, level_or_rel, title = cls
+
+                    if kind == "numbered":
+                        # Find the nearest non-numbered ancestor; use its
+                        # level as the base for relative nesting.
+                        parent_level = 0
+                        for s in reversed(stack):
+                            if s.kind != "numbered":
+                                parent_level = s.level
+                                break
+                        level = parent_level + level_or_rel
+                    else:
+                        level = level_or_rel
+
                     while stack and stack[-1].level >= level:
                         stack.pop()
-                    section = _Section(level=level, title=title)
+                    section = _Section(level=level, title=title, kind=kind)
                     if stack:
                         stack[-1].children.append(section)
                     else:
