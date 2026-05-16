@@ -1,23 +1,44 @@
 # HypRAG Test Prompt
 
-I just found this Python library called **hyprag** on GitHub — claims +154% Recall@5 on legal document retrieval using hierarchical chunk expansion. Want to test if it actually works.
+I just found this Python library called **hyprag** on GitHub — claims +154% Recall@5 on legal document retrieval using hierarchical chunk expansion, and one method that indexes anything (URL, PDF, markdown, HTML, plain text). Want to test if it actually works.
 
 ## Install
 
 ```
-pip install hyprag
-pip install "hyprag[legal]"
+pip install "hyprag[all]"
 ```
 
-> Note: pip may show a harmless warning about `lxml` or `requests` version pins on Python 3.14 — the install succeeds regardless.
+> Note: this pulls in `beautifulsoup4`, `pypdf`, `pdfplumber`, `lxml`, and `requests`. On Python 3.14 pip may show a warning about version pins — install succeeds regardless.
 
-## Test 1 — basic retrieval on plain text chunks
+## Test 1 — URL fetch, ask a real question
 
 ```python
-from hyprag.retriever import HypragRetriever
+from hyprag import HypragRetriever
 
 r = HypragRetriever()
-r.index_texts([
+r.index("https://en.wikipedia.org/wiki/General_Data_Protection_Regulation")
+
+results = r.query(
+    "What is the maximum fine for a severe violation?",
+    k=1,
+    return_metadata=True,
+    rescore_after_expand=True,
+    min_score=0.55,
+)
+for res in results:
+    print(f"[{res.chunk.node_path}] score={res.score:.3f} ({res.relation})")
+    print(res.chunk.text[:200], "\n")
+```
+
+Expected: the top result mentions the **€20M / 4% of global turnover** maximum fine from GDPR Article 83(5).
+
+## Test 2 — Plain-text fallback
+
+```python
+from hyprag import HypragRetriever
+
+r = HypragRetriever()
+r.index([
     "The right to erasure allows individuals to request deletion of personal data.",
     "Controllers must respond to erasure requests within one month.",
     "Erasure does not apply when data is needed for legal claims.",
@@ -25,45 +46,42 @@ r.index_texts([
     "Personal data must be kept accurate and up to date at all times.",
 ])
 
-results = r.query("when can someone request their data be deleted?", k=3)
-for chunk in results:
-    print(chunk.node_path, chunk.text[:100])
+for chunk in r.query("when can someone request their data be deleted?", k=3):
+    print(chunk.node_path, chunk.text[:80])
 ```
 
-## Test 2 — HTML chunker on a simple structured document
+## Test 3 — Markdown file dispatch
 
 ```python
-from hyprag.chunkers.html_generic import HTMLChunker
+from pathlib import Path
+from hyprag import HypragRetriever
 
-html = """
-<html><body>
-  <h1>Chapter 1: Data Rights</h1>
-  <p>Individuals have several rights regarding their personal data.</p>
-  <h2>Article 1: Right of Access</h2>
-  <ol>
-    <li>Any person may request a copy of their data held by a controller.</li>
-    <li>The controller must respond within 30 days of receiving the request.</li>
-  </ol>
-  <h2>Article 2: Right to Erasure</h2>
-  <ol>
-    <li>Individuals may request deletion of their data under certain conditions.</li>
-    <li>Erasure may be refused if the data is required for legal proceedings.</li>
-  </ol>
-</body></html>
-"""
+Path("notes.md").write_text("""
+# Project Notes
 
-chunks = HTMLChunker().chunk_html(html)
-for c in chunks:
-    print(f"depth={c.depth} path={c.node_path}")
-    print(f"  {c.text[:80]}")
-    print()
+## Background
+
+We migrated to Postgres in Q3 because the MongoDB cluster had recurring write conflicts.
+
+## Decisions
+
+- Switch ORMs to SQLAlchemy for type safety
+- Drop the read replica until traffic justifies it
+- Use connection pooling in production
+""")
+
+r = HypragRetriever()
+r.index("notes.md")
+for chunk in r.query("why did we move off mongodb?", k=2):
+    print(chunk.node_path, chunk.text[:100])
 ```
 
 ## What to verify
 
-1. Does `index_texts` work without errors?
-2. Does the query return relevant results?
-3. Does `HTMLChunker` produce a proper hierarchy — depth 0 for the root, depth 1 for Chapter, depth 2 for Articles, depth 3 for the numbered list items?
-4. Do `node_path` and `parent_path` relationships make sense (e.g. `doc.chapter-1-data-rights.article-2-right-to-erasure.li1`)?
+1. Does `r.index(url)` work without errors and produce >100 chunks for the Wikipedia GDPR page?
+2. Does the top GDPR result actually mention the €20M / 4% fine?
+3. Does `r.index([...])` (list of strings) return chunks at depth 0 with no parent?
+4. Does `r.index("notes.md")` produce a hierarchy (`doc`, `doc.project-notes`, `doc.project-notes.background`, …)?
+5. Does subtree expansion pull in siblings — e.g. querying for "mongodb" returns the Background section AND the Decisions section?
 
-Report exactly what gets printed for both tests, including any errors.
+Report exactly what gets printed for each test, including any errors or warnings.

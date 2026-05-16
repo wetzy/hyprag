@@ -12,6 +12,75 @@ Most RAG pipelines treat documents as flat bags of chunks. When the right answer
 
 HypRAG keeps that structure. Each chunk carries a `node_path` (e.g. `gdpr.ch3.art15.p1.pa`) and a depth tag. After the FAISS lookup, `subtree_expand` returns the parent, the siblings, and the children of every hit. Same recall as flat FAISS at the seed step, but a much higher hit rate after expansion — the answer arrives with its scaffolding intact.
 
+## Install
+
+```bash
+pip install hyprag                       # core: faiss, sentence-transformers, numpy
+pip install "hyprag[pdf]"                # + pypdf for PDF chunking
+pip install "hyprag[pdf-plumber]"        # + pdfplumber for clean text on legal/EU PDFs
+pip install "hyprag[html]"               # + beautifulsoup4 for HTML/markdown chunkers
+pip install "hyprag[all]"                # everything optional
+```
+
+## Quick start
+
+One method handles every input format:
+
+```python
+from hyprag import HypragRetriever
+
+r = HypragRetriever()
+r.index("https://en.wikipedia.org/wiki/General_Data_Protection_Regulation")
+
+results = r.query(
+    "What is the maximum fine for a severe violation?",
+    k=1,
+    return_metadata=True,
+    rescore_after_expand=True,
+    min_score=0.55,
+)
+for res in results:
+    print(f"[{res.chunk.node_path}] score={res.score:.3f} ({res.relation})")
+    print(res.chunk.text[:200], "\n")
+```
+
+`r.index()` dispatches on what you pass:
+
+| Input                                       | Routed to                       |
+| ------------------------------------------- | ------------------------------- |
+| `"https://..."`                             | URL fetch → HTML / PDF chunker  |
+| `"./contract.pdf"`                          | `PDFChunker`                    |
+| `"./notes.md"`                              | `MarkdownChunker`               |
+| `"./doc.html"`                              | `HTMLChunker`                   |
+| `"./codebase/"` (directory)                 | extension dispatch per file     |
+| `"./script.py"`                             | `HierarchicalChunker` (AST)     |
+| `"<html><body>..."`                         | `HTMLChunker`                   |
+| `"# Title\n..."`                            | `MarkdownChunker`               |
+| Anything else (raw string)                  | `TextChunker`                   |
+| `["doc 1", "doc 2"]`                        | flat list of root-level chunks  |
+
+Use `chunker_kwargs` to forward options (e.g. PDF backend choice):
+
+```python
+r.index("./boe-gdpr-es.pdf", chunker_kwargs={"backend": "pdfplumber"})
+```
+
+## Why structural expansion matters
+
+```python
+results = r.query("...", k=5, return_metadata=True, rescore_after_expand=True)
+for res in results:
+    print(res.score, res.relation, res.chunk.node_path)
+```
+
+Each `RetrievalResult` carries:
+- `chunk` — the actual `Chunk`.
+- `score` — cosine similarity in `[0, 1]`.
+- `relation` — `"seed"`, `"parent"`, `"sibling"`, or `"child"`.
+- `seed_path` — which seed pulled this chunk in.
+
+The seed is the FAISS top hit. Its parent, siblings, and children come along because they're often where the actual answer lives. `rescore_after_expand=True` re-encodes everything against the query so siblings with high overlap end up at the top; `min_score=` drops low-signal expansions (e.g. the entire References section of a Wikipedia article when one ref happened to match).
+
 ## Benchmarks
 
 ### GDPR (EU 2016/679) — 821 chunks, 20 hand-labeled queries, BGE-base, K=5
@@ -42,63 +111,18 @@ The expansion lift is algorithm-driven, not chunker-biased. A source-agnostic ch
 
 Expansion lift: **+120 %**.
 
-Reproducing the GDPR numbers:
+## Built-in chunkers
 
-```bash
-python -m benchmarks.run_legal_comparison --html-path gdpr_corpus.html
-python -m benchmarks.compare_chunkers      --html-path gdpr_corpus.html
-```
+| Chunker               | Hierarchy signal                                           |
+| --------------------- | ---------------------------------------------------------- |
+| `HierarchicalChunker` | Python AST — module → class → method                       |
+| `HTMLChunker`         | `<h1>`–`<h6>` levels + `<ol>/<ul>/<li>` nesting            |
+| `MarkdownChunker`     | ATX (`#`–`######`) + setext + list nesting                 |
+| `PDFChunker`          | Numbered headings (`1.`, `2.1.3`), word headings (English + Spanish: `Artículo`, `Capítulo`, `Sección`, …), ALL-CAPS lines, page fallback |
+| `TextChunker`         | Paragraph (blank-line) split with sentence overflow        |
+| `GDPRChunker`         | DOM-driven, fetches gdpr-info.eu per article               |
 
-## Install
-
-```bash
-pip install hyprag                       # core (faiss, sentence-transformers, numpy)
-pip install hyprag[legal]                # adds beautifulsoup4 for HTML chunkers
-pip install hyprag[api]                  # adds fastapi + uvicorn for the HTTP server
-pip install hyprag[dev]                  # pytest, ruff, mypy
-```
-
-## Quick start — Python codebase
-
-```python
-from hyprag.retriever import HypragRetriever
-
-r = HypragRetriever()              # default encoder: BAAI/bge-base-en-v1.5
-r.index_path("./myproject")        # AST-based chunker, module → class → method
-
-for chunk in r.query("how does the parser handle escape sequences?", k=5):
-    print(chunk.depth, chunk.node_path, chunk.start_line)
-```
-
-## Quick start — GDPR (or any hierarchical HTML)
-
-```python
-from hyprag.chunkers import GDPRChunker     # domain-specific, +154% lift
-from hyprag.chunkers import HTMLChunker     # generic, +120% lift, zero domain knowledge
-from hyprag.retriever import HypragRetriever
-
-# Fetch the corpus once (per-article from gdpr-info.eu; takes ~5 min)
-chunks = GDPRChunker().load()              # or .load(html_path=Path("..."))
-
-r = HypragRetriever()
-r.index_chunks(chunks)
-
-for chunk in r.query("when must a data breach be reported?", k=5):
-    print(chunk.depth, chunk.node_path)
-    print(chunk.text[:200])
-```
-
-`HTMLChunker` works on any HTML document — Wikipedia, documentation, statutes — using only `<h1>`–`<h6>` levels and `<ol>/<ul>/<li>` nesting as hierarchy signals.
-
-## HTTP API
-
-```bash
-uvicorn api.main:app --reload
-```
-
-`POST /index/gdpr`, `POST /index/codebase`, `POST /index/texts` build indexes. `POST /search` queries them. Each request is authenticated via `X-API-Key`; tiering (free / paid) caps vectors, queries/day, and TTL — see `api/auth.py`.
-
-Every `IndexResponse` returns `depth_distribution` and `warnings`, so callers can verify the chunker recovered the hierarchy as expected without inspecting internals.
+All produce `Chunk` objects with a `node_path` that subtree expansion walks.
 
 ## Subtree expansion
 
@@ -110,6 +134,27 @@ Every `IndexResponse` returns `depth_distribution` and `warnings`, so callers ca
 
 All three are toggleable; `max_expand` caps the result size. The walk is O(N) per query — cheap enough to run on every search.
 
+## Multilingual
+
+The default encoder (`BAAI/bge-base-en-v1.5`) is English-only. For Spanish, French, German, or any mixed-language corpus, swap in a multilingual model:
+
+```python
+r = HypragRetriever(
+    encoder_model="sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+)
+```
+
+For Spanish BOE / EUR-Lex PDFs, combine the multilingual encoder with `backend="pdfplumber"` — pypdf mangles tracked typography (`"Artículo"` → `"Ar tículo"`), defeating heading detection.
+
+## HTTP API
+
+```bash
+pip install "hyprag[api]"
+uvicorn api.main:app --reload
+```
+
+`POST /index/url`, `POST /index/codebase`, `POST /index/texts` build indexes. `POST /search` queries them. Each request is authenticated via `X-API-Key`; tiering (free / paid) caps vectors, queries/day, and TTL — see `api/auth.py`.
+
 ## What's deliberately not here
 
 - **No geometry.** Earlier versions used a Poincaré-ball backend for hyperbolic embeddings. Four experiments across two corpora produced numerically identical results to FAISS at up to 257× the latency. Removed in v0.5.0; the git history preserves the code.
@@ -119,7 +164,7 @@ All three are toggleable; `max_expand` caps the result size. The walk is O(N) pe
 
 ## Status
 
-v0.5.x. The algorithm is stable. The API is stable. The chunkers are tested against real corpora. What's missing is a hosted demo and packaging polish.
+v0.7.x. The algorithm is stable. The unified `r.index()` API is the recommended entry point. PDF support is best-effort — `pdfplumber` is needed for legal/EU PDFs with tracked typography.
 
 ## License
 
